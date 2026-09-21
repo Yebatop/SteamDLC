@@ -1,4 +1,5 @@
 import { fetchAppDetails, type AppDetailsOptions, type RawAppData } from "./appdetails";
+import { SteamApiError } from "./errors";
 import { getJson } from "./http";
 import type { DlcItem, OwnedGame } from "./types";
 
@@ -6,21 +7,6 @@ import type { DlcItem, OwnedGame } from "./types";
 const DLC_LIST_TTL = 60 * 60 * 24;
 /** Цены меняются в начале распродаж — держим полчаса. */
 const PRICE_TTL = 60 * 30;
-
-export class SteamApiError extends Error {
-  constructor(
-    message: string,
-    readonly code:
-      | "no_key"
-      | "bad_steamid"
-      | "private_profile"
-      | "vanity_not_found"
-      | "upstream",
-  ) {
-    super(message);
-    this.name = "SteamApiError";
-  }
-}
 
 const STEAMID64_RE = /^\d{17}$/;
 
