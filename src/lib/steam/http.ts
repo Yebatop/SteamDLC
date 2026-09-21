@@ -1,27 +1,43 @@
+import { cleanDetail, SteamHttpError } from "./errors";
+
 /**
  * Тонкая обёртка над fetch для Steam: таймауты, ретраи и уважение к 429.
  *
  * Store API (store.steampowered.com/api/*) лимитирует примерно 200 запросов
  * за 5 минут на IP. На Vercel IP общий, поэтому 429 — штатная ситуация,
  * а не исключение: ловим, ждём и повторяем.
+ *
+ * Все ошибки поднимаются наверх как SteamHttpError с хостом и куском тела
+ * ответа: без этого 403 «ключ не принят» не отличить от 403 «IP не нравится».
  */
 
-export class SteamHttpError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-    readonly retryable: boolean,
-  ) {
-    super(message);
-    this.name = "SteamHttpError";
-  }
-}
+export { SteamHttpError };
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 const MAX_ATTEMPTS = 4;
+/** Больше и не нужно: Steam пишет причину в первых строках. */
+const DETAIL_LIMIT = 500;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "";
+  }
+}
+
+/** Тело ошибочного ответа: полезно, но не должно ронять обработку. */
+async function detailOf(response: Response): Promise<string> {
+  try {
+    const text = await response.text();
+    return cleanDetail(text.slice(0, DETAIL_LIMIT));
+  } catch {
+    return "";
+  }
 }
 
 interface GetJsonOptions {
@@ -33,7 +49,8 @@ interface GetJsonOptions {
 
 export async function getJson<T>(url: string, options: GetJsonOptions = {}): Promise<T> {
   const { revalidate = 0, timeoutMs = DEFAULT_TIMEOUT_MS, attempts = MAX_ATTEMPTS } = options;
-  let lastError: unknown;
+  const host = hostOf(url);
+  let lastError: SteamHttpError | null = null;
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const controller = new AbortController();
@@ -52,7 +69,7 @@ export async function getJson<T>(url: string, options: GetJsonOptions = {}): Pro
       if (response.status === 429) {
         const retryAfter = Number(response.headers.get("retry-after")) || 0;
         const waitMs = retryAfter > 0 ? retryAfter * 1000 : Math.min(2 ** attempt * 1000, 15_000);
-        lastError = new SteamHttpError("Steam ограничил частоту запросов (429)", 429, true);
+        lastError = new SteamHttpError("Steam ограничил частоту запросов (429)", 429, true, host);
         if (attempt < attempts) {
           await sleep(waitMs);
           continue;
@@ -61,7 +78,13 @@ export async function getJson<T>(url: string, options: GetJsonOptions = {}): Pro
       }
 
       if (response.status >= 500) {
-        lastError = new SteamHttpError(`Steam ответил ${response.status}`, response.status, true);
+        lastError = new SteamHttpError(
+          `Steam ответил ${response.status}`,
+          response.status,
+          true,
+          host,
+          await detailOf(response),
+        );
         if (attempt < attempts) {
           await sleep(Math.min(2 ** attempt * 500, 8_000));
           continue;
@@ -70,13 +93,33 @@ export async function getJson<T>(url: string, options: GetJsonOptions = {}): Pro
       }
 
       if (!response.ok) {
-        throw new SteamHttpError(`Steam ответил ${response.status}`, response.status, false);
+        // 400-е не ретраим: повтор с тем же ключом или appid ничего не изменит.
+        throw new SteamHttpError(
+          `Steam ответил ${response.status}`,
+          response.status,
+          false,
+          host,
+          await detailOf(response),
+        );
       }
 
       return (await response.json()) as T;
     } catch (error) {
-      if (error instanceof SteamHttpError && !error.retryable) throw error;
-      lastError = error;
+      if (error instanceof SteamHttpError) {
+        if (!error.retryable) throw error;
+        lastError = error;
+      } else {
+        // Обрыв связи, таймаут, DNS: статус 0 означает «ответа не было вовсе».
+        const reason = error instanceof Error ? error.message : String(error);
+        lastError = new SteamHttpError(
+          `Нет ответа от ${host || "Steam"}`,
+          0,
+          true,
+          host,
+          cleanDetail(reason),
+        );
+      }
+
       if (attempt < attempts) {
         await sleep(Math.min(2 ** attempt * 500, 8_000));
         continue;
@@ -86,9 +129,7 @@ export async function getJson<T>(url: string, options: GetJsonOptions = {}): Pro
     }
   }
 
-  throw lastError instanceof Error
-    ? lastError
-    : new SteamHttpError("Не удалось получить ответ от Steam", 0, true);
+  throw lastError ?? new SteamHttpError("Не удалось получить ответ от Steam", 0, true, host);
 }
 
 /** Выполняет задачи с ограниченным параллелизмом, сохраняя порядок результатов. */

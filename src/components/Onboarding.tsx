@@ -3,6 +3,7 @@
 import { REGIONS } from "@/lib/regions";
 import type { Ownership } from "@/lib/client/ownership";
 import type { Settings } from "@/lib/client/settings";
+import Diagnostics from "./Diagnostics";
 import UserdataImport from "./UserdataImport";
 import { Button, Field, TextInput } from "./ui";
 
@@ -104,11 +105,20 @@ export default function Onboarding({
             «Для всех». Иначе список игр не отдаётся.
           </div>
 
-          <div className="flex items-center gap-3">
-            <Button onClick={onStart} variant="primary" disabled={busy || !settings.profile.trim()}>
-              {busy ? "Загружаю…" : "Загрузить библиотеку"}
-            </Button>
-            {error ? <span className="text-sm text-danger">{error}</span> : null}
+          <div className="space-y-3">
+            <div className="flex items-center gap-3">
+              <Button
+                onClick={onStart}
+                variant="primary"
+                disabled={busy || !settings.profile.trim()}
+              >
+                {busy ? "Загружаю…" : "Загрузить библиотеку"}
+              </Button>
+              {error ? <span className="text-sm text-danger">{error}</span> : null}
+            </div>
+
+            {/* Если загрузка не удалась, первым делом нужно понять, что видит сервер. */}
+            <Diagnostics apiKey={settings.apiKey} />
           </div>
         </section>
 
