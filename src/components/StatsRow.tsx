@@ -6,29 +6,36 @@ import type { Stats } from "@/lib/client/filters";
 export default function StatsRow({ stats, games }: { stats: Stats; games: number }) {
   const savings = stats.sumFull - stats.sum;
 
-  const cells: Array<{ label: string; value: string; tone?: string }> = [
-    { label: "Игр в библиотеке", value: String(games) },
-    { label: "Всего DLC найдено", value: String(stats.total) },
-    { label: "Уже куплено", value: String(stats.owned) },
-    { label: "Показано сейчас", value: String(stats.shown), tone: "text-steam" },
+  const cells = [
+    { label: "Игр в библиотеке", value: String(games), accent: "" },
+    { label: "Дополнений найдено", value: String(stats.total), accent: "" },
+    { label: "Уже куплено", value: String(stats.owned), accent: "" },
+    { label: "Показано сейчас", value: String(stats.shown), accent: "text-steam" },
     {
       label: "Сумма показанного",
       value: formatMoney(stats.sum, stats.currency),
-      tone: "text-slate-100",
+      accent: "text-slate-50",
     },
     {
-      label: "Со скидкой",
-      value: savings > 0 ? `${stats.discounted} · −${formatMoney(savings, stats.currency)}` : "—",
-      tone: savings > 0 ? "text-sale" : undefined,
+      label: "Экономия со скидок",
+      value: savings > 0 ? formatMoney(savings, stats.currency) : "—",
+      accent: savings > 0 ? "text-sale" : "",
     },
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-line bg-line sm:grid-cols-3 lg:grid-cols-6">
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
       {cells.map((cell) => (
-        <div key={cell.label} className="bg-panel px-3 py-2.5">
-          <div className="text-[11px] tracking-wide text-muted uppercase">{cell.label}</div>
-          <div className={`mt-0.5 text-lg font-semibold ${cell.tone ?? "text-slate-200"}`}>
+        <div
+          key={cell.label}
+          className="rounded-xl border border-line bg-panel px-3.5 py-3 transition-colors hover:border-steam-dim/60"
+        >
+          <div className="truncate text-[11px] tracking-wide text-muted uppercase">
+            {cell.label}
+          </div>
+          <div
+            className={`mt-1 truncate text-xl font-semibold ${cell.accent || "text-slate-200"}`}
+          >
             {cell.value}
           </div>
         </div>

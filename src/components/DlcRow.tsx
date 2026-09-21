@@ -2,11 +2,10 @@
 
 import { formatMoney } from "@/lib/money";
 import type { DlcRow as Row } from "@/lib/client/filters";
+import SteamImage from "./SteamImage";
 import { Badge } from "./ui";
 
 const storeUrl = (appid: number) => `https://store.steampowered.com/app/${appid}/`;
-const capsuleUrl = (appid: number) =>
-  `https://cdn.cloudflare.steamstatic.com/steam/apps/${appid}/capsule_sm_120.jpg`;
 
 export default function DlcRowItem({
   row,
@@ -28,8 +27,8 @@ export default function DlcRowItem({
 
   return (
     <div
-      className={`flex items-center gap-3 border-b border-line/50 px-3 py-2 transition-colors hover:bg-raised/60 ${
-        selected ? "bg-steam-dim/15" : ""
+      className={`group flex items-center gap-3 border-b border-line/40 px-3 py-2.5 transition-colors last:border-b-0 ${
+        selected ? "bg-steam-dim/15" : "hover:bg-raised/50"
       }`}
     >
       <input
@@ -41,18 +40,14 @@ export default function DlcRowItem({
         title={row.owned ? "Уже куплено" : "Выбрать"}
       />
 
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={capsuleUrl(item.id)}
-        alt=""
-        loading="lazy"
-        width={92}
-        height={43}
-        className="hidden h-[43px] w-[92px] shrink-0 rounded-sm bg-raised object-cover sm:block"
-        onError={(event) => {
-          event.currentTarget.style.visibility = "hidden";
-        }}
-      />
+      <a
+        href={storeUrl(item.id)}
+        target="_blank"
+        rel="noreferrer"
+        className="hidden shrink-0 overflow-hidden rounded-md ring-1 ring-line/60 transition-shadow group-hover:ring-steam-dim sm:block"
+      >
+        <SteamImage appid={item.id} alt="" className="h-[44px] w-[116px]" />
+      </a>
 
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -60,7 +55,7 @@ export default function DlcRowItem({
             href={storeUrl(item.id)}
             target="_blank"
             rel="noreferrer"
-            className="truncate text-sm font-medium text-slate-100 hover:text-steam hover:underline"
+            className="truncate text-[15px] font-medium text-slate-100 transition-colors hover:text-steam"
           >
             {item.name}
           </a>
@@ -69,35 +64,34 @@ export default function DlcRowItem({
           {row.lowestEver && item.discount > 0 ? <Badge tone="sale">минимум</Badge> : null}
           {item.coming ? <Badge tone="warn">скоро</Badge> : null}
           {item.unavailable ? <Badge tone="warn">нет в регионе</Badge> : null}
-          {item.type !== "dlc" ? <Badge>{item.type}</Badge> : null}
         </div>
 
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted">
           <button
             type="button"
             onClick={onPickGame}
-            className="truncate hover:text-steam hover:underline"
-            title="Показать только DLC этой игры"
+            className="max-w-full truncate transition-colors hover:text-steam"
+            title="Показать только дополнения этой игры"
           >
             {row.gameName}
           </button>
           {row.playtimeHours > 0 ? <span>· {row.playtimeHours} ч наиграно</span> : null}
           {row.history?.min != null && !row.lowestEver ? (
             <span title={`Минимум зафиксирован ${row.history.minDate}`}>
-              · было {formatMoney(row.history.min, item.currency)}
+              · минимум был {formatMoney(row.history.min, item.currency)}
             </span>
           ) : null}
         </div>
       </div>
 
       <div className="shrink-0 text-right">
-        {item.discount > 0 ? (
+        {item.discount > 0 && !item.free ? (
           <div className="flex items-center justify-end gap-2">
-            <span className="rounded bg-sale-bg px-1.5 py-0.5 text-xs font-bold text-sale">
+            <span className="rounded-md bg-sale-bg px-1.5 py-1 text-xs font-bold text-sale">
               −{item.discount}%
             </span>
             <div>
-              <div className="text-xs text-muted line-through">
+              <div className="text-[11px] text-muted line-through">
                 {formatMoney(item.initial, item.currency)}
               </div>
               <div className="text-sm font-semibold text-sale">{price}</div>
@@ -108,11 +102,11 @@ export default function DlcRowItem({
         )}
       </div>
 
-      <div className="flex shrink-0 gap-1">
+      <div className="flex shrink-0 items-center gap-0.5">
         <a
           href={`steam://openurl/${storeUrl(item.id)}`}
           title="Открыть в клиенте Steam"
-          className="rounded px-2 py-1 text-xs text-muted hover:bg-raised hover:text-steam"
+          className="rounded-md px-2 py-1.5 text-xs text-muted transition-colors hover:bg-raised hover:text-steam"
         >
           Steam
         </a>
@@ -121,7 +115,7 @@ export default function DlcRowItem({
             type="button"
             onClick={onMarkBought}
             title="Отметить как купленное"
-            className="rounded px-2 py-1 text-xs text-muted hover:bg-raised hover:text-sale"
+            className="rounded-md px-2 py-1.5 text-xs text-muted transition-colors hover:bg-raised hover:text-sale"
           >
             ✓
           </button>

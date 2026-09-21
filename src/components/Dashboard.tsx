@@ -2,13 +2,15 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { formatMoney } from "@/lib/money";
+import { plural } from "@/lib/plural";
 import type { DlcRow, FilterState, Stats } from "@/lib/client/filters";
+import DlcCard from "./DlcCard";
 import DlcRowItem from "./DlcRow";
 import FiltersPanel from "./FiltersPanel";
 import StatsRow from "./StatsRow";
 import { Button } from "./ui";
 
-const PAGE = 100;
+const PAGE = 60;
 
 export default function Dashboard({
   rows,
@@ -52,6 +54,7 @@ export default function Dashboard({
 
   const selected = useMemo(() => new Set(selection), [selection]);
   const page = filtered.slice(0, visible);
+  const grid = filters.view === "grid";
 
   const groups = useMemo(() => {
     if (!filters.groupByGame) return null;
@@ -71,8 +74,32 @@ export default function Dashboard({
   const selectedSum = selectedRows.reduce((sum, row) => sum + (row.item.final ?? 0), 0);
   const selectedCurrency = selectedRows.find((row) => row.item.currency)?.item.currency ?? null;
 
+  const renderRow = (row: DlcRow) => {
+    const props = {
+      row,
+      selected: selected.has(row.item.id),
+      onToggle: () => onToggleSelect(row.item.id),
+      onMarkBought: () => onMarkBought(row.item.id),
+      onPickGame: () => onFilters({ ...filters, parentAppid: row.item.parent }),
+    };
+    return grid ? (
+      <DlcCard key={row.item.id} {...props} />
+    ) : (
+      <DlcRowItem key={row.item.id} {...props} />
+    );
+  };
+
+  const wrap = (children: React.ReactNode) =>
+    grid ? (
+      <div className="grid grid-cols-2 gap-3 p-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+        {children}
+      </div>
+    ) : (
+      <div>{children}</div>
+    );
+
   return (
-    <div className="space-y-4 pb-24">
+    <div className="space-y-4 pb-28">
       <StatsRow stats={stats} games={gamesCount} />
 
       <FiltersPanel
@@ -84,62 +111,70 @@ export default function Dashboard({
         currencyLabel={currencyLabel}
       />
 
-      <div className="overflow-hidden rounded-lg border border-line bg-panel">
-        <div className="flex items-center justify-between border-b border-line bg-raised/40 px-3 py-2 text-xs text-muted">
+      <div className="overflow-hidden rounded-2xl border border-line bg-panel">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-raised/30 px-3.5 py-2.5 text-xs text-muted">
           <span>
             Показано {page.length} из {filtered.length}
           </span>
-          <button
-            type="button"
-            onClick={() => onSelectVisible(page.filter((row) => !row.owned).map((row) => row.item.id))}
-            className="hover:text-steam"
-          >
-            Выбрать всё на экране
-          </button>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() =>
+                onSelectVisible(page.filter((row) => !row.owned).map((row) => row.item.id))
+              }
+              className="rounded-md px-2 py-1 transition-colors hover:bg-raised hover:text-steam"
+            >
+              Выбрать всё на экране
+            </button>
+
+            <div className="flex rounded-lg border border-line p-0.5">
+              {(["grid", "list"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => onFilters({ ...filters, view: mode })}
+                  className={`rounded-md px-2.5 py-1 transition-colors ${
+                    filters.view === mode
+                      ? "bg-steam-dim/30 text-steam"
+                      : "text-muted hover:text-slate-200"
+                  }`}
+                >
+                  {mode === "grid" ? "Плитка" : "Список"}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
         {filtered.length === 0 ? (
-          <div className="px-4 py-10 text-center text-sm text-muted">
-            Ничего не найдено. Попробуй ослабить фильтры — например, выключить «Скрыть купленные»
-            или «Скрыть недоступное в регионе».
+          <div className="px-4 py-16 text-center">
+            <div className="text-sm text-slate-300">Ничего не найдено</div>
+            <div className="mx-auto mt-1 max-w-sm text-xs text-muted">
+              Попробуй ослабить фильтры — например, выключить «Скрыть купленные» или
+              «Скрыть недоступное в регионе».
+            </div>
           </div>
         ) : null}
 
         {groups
           ? groups.map(([gameName, list]) => (
               <div key={gameName}>
-                <div className="sticky top-0 z-10 flex items-center justify-between bg-raised px-3 py-1.5 text-xs font-semibold text-slate-300">
+                <div className="sticky top-0 z-10 flex items-center justify-between gap-2 bg-raised px-3.5 py-2 text-xs font-semibold text-slate-200">
                   <span className="truncate">{gameName}</span>
-                  <span className="text-muted">
-                    {list.length} ·{" "}
+                  <span className="shrink-0 text-muted">
+                    {list.length}{" "}
+                    {plural(list.length, "дополнение", "дополнения", "дополнений")} ·{" "}
                     {formatMoney(
                       list.reduce((sum, row) => sum + (row.item.final ?? 0), 0),
                       list[0]?.item.currency ?? null,
                     )}
                   </span>
                 </div>
-                {list.map((row) => (
-                  <DlcRowItem
-                    key={row.item.id}
-                    row={row}
-                    selected={selected.has(row.item.id)}
-                    onToggle={() => onToggleSelect(row.item.id)}
-                    onMarkBought={() => onMarkBought(row.item.id)}
-                    onPickGame={() => onFilters({ ...filters, parentAppid: row.item.parent })}
-                  />
-                ))}
+                {wrap(list.map(renderRow))}
               </div>
             ))
-          : page.map((row) => (
-              <DlcRowItem
-                key={row.item.id}
-                row={row}
-                selected={selected.has(row.item.id)}
-                onToggle={() => onToggleSelect(row.item.id)}
-                onMarkBought={() => onMarkBought(row.item.id)}
-                onPickGame={() => onFilters({ ...filters, parentAppid: row.item.parent })}
-              />
-            ))}
+          : wrap(page.map(renderRow))}
 
         {visible < filtered.length ? (
           <div className="flex justify-center gap-2 border-t border-line p-3">
@@ -152,7 +187,7 @@ export default function Dashboard({
       </div>
 
       {selection.length > 0 ? (
-        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-panel/95 backdrop-blur">
+        <div className="glass fixed inset-x-0 bottom-0 z-40 border-t border-line">
           <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-3 px-4 py-3">
             <span className="text-sm text-slate-200">
               Выбрано <b>{selection.length}</b> · Итого{" "}
