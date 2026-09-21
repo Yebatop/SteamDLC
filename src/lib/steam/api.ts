@@ -1,0 +1,186 @@
+import { fetchAppDetails, type AppDetailsOptions, type RawAppData } from "./appdetails";
+import { getJson } from "./http";
+import type { DlcItem, OwnedGame } from "./types";
+
+/** Список DLC у игры меняется редко — держим сутки. */
+const DLC_LIST_TTL = 60 * 60 * 24;
+/** Цены меняются в начале распродаж — держим полчаса. */
+const PRICE_TTL = 60 * 30;
+
+export class SteamApiError extends Error {
+  constructor(
+    message: string,
+    readonly code:
+      | "no_key"
+      | "bad_steamid"
+      | "private_profile"
+      | "vanity_not_found"
+      | "upstream",
+  ) {
+    super(message);
+    this.name = "SteamApiError";
+  }
+}
+
+const STEAMID64_RE = /^\d{17}$/;
+
+/**
+ * Принимает что угодно: SteamID64, ссылку на профиль, кастомный URL.
+ * Кастомный URL требует ключа Web API.
+ */
+export async function resolveSteamId(input: string, apiKey: string | null): Promise<string> {
+  const raw = input.trim();
+  if (!raw) throw new SteamApiError("Не указан профиль Steam", "bad_steamid");
+
+  if (STEAMID64_RE.test(raw)) return raw;
+
+  const profileMatch = raw.match(/steamcommunity\.com\/profiles\/(\d{17})/i);
+  if (profileMatch) return profileMatch[1];
+
+  const vanityMatch = raw.match(/steamcommunity\.com\/id\/([^/?#]+)/i);
+  const vanity = vanityMatch ? decodeURIComponent(vanityMatch[1]) : raw;
+
+  if (/[^A-Za-z0-9_.-]/.test(vanity)) {
+    throw new SteamApiError("Не похоже ни на SteamID64, ни на ссылку профиля", "bad_steamid");
+  }
+  if (!apiKey) {
+    throw new SteamApiError(
+      "Чтобы определить SteamID по короткой ссылке, нужен ключ Steam Web API. " +
+        "Либо укажи SteamID64 (17 цифр) — его можно посмотреть в настройках профиля.",
+      "no_key",
+    );
+  }
+
+  const params = new URLSearchParams({ key: apiKey, vanityurl: vanity });
+  const body = await getJson<{ response?: { success?: number; steamid?: string } }>(
+    `https://api.steampowered.com/ISteamUser/ResolveVanityURL/v1/?${params.toString()}`,
+  );
+
+  const steamid = body.response?.steamid;
+  if (body.response?.success !== 1 || !steamid) {
+    throw new SteamApiError(`Профиль «${vanity}» не найден`, "vanity_not_found");
+  }
+  return steamid;
+}
+
+/** Библиотека пользователя вместе с наигранными часами. */
+export async function fetchOwnedGames(steamId: string, apiKey: string): Promise<OwnedGame[]> {
+  if (!apiKey) throw new SteamApiError("Нужен ключ Steam Web API", "no_key");
+  if (!STEAMID64_RE.test(steamId)) throw new SteamApiError("Некорректный SteamID64", "bad_steamid");
+
+  const params = new URLSearchParams({
+    key: apiKey,
+    steamid: steamId,
+    include_appinfo: "1",
+    include_played_free_games: "1",
+    format: "json",
+  });
+
+  const body = await getJson<{
+    response?: {
+      game_count?: number;
+      games?: Array<{
+        appid?: number;
+        name?: string;
+        playtime_forever?: number;
+        playtime_2weeks?: number;
+        rtime_last_played?: number;
+      }>;
+    };
+  }>(`https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?${params.toString()}`);
+
+  const games = body.response?.games;
+  if (!games) {
+    // Steam отдаёт пустой объект и для закрытого профиля, и для пустой библиотеки.
+    throw new SteamApiError(
+      "Steam не отдал список игр. Обычно это значит, что в настройках приватности " +
+        "профиля «Игровые данные» закрыты — поставь «Для всех» и повтори.",
+      "private_profile",
+    );
+  }
+
+  return games
+    .filter((game): game is { appid: number } & typeof game => typeof game.appid === "number")
+    .map((game) => ({
+      appid: game.appid,
+      name: game.name?.trim() || `App ${game.appid}`,
+      playtime: game.playtime_forever ?? 0,
+      playtime2w: game.playtime_2weeks ?? 0,
+      lastPlayed: game.rtime_last_played ?? 0,
+    }))
+    .sort((a, b) => b.playtime - a.playtime);
+}
+
+/** appid игры -> список appid её DLC. */
+export async function fetchDlcIds(
+  appids: number[],
+  options: Omit<AppDetailsOptions, "revalidate">,
+): Promise<Record<number, number[]>> {
+  const details = await fetchAppDetails(appids, { ...options, revalidate: DLC_LIST_TTL });
+  const out: Record<number, number[]> = {};
+
+  for (const appid of appids) {
+    const data = details.get(appid);
+    const dlc = data?.dlc;
+    if (!Array.isArray(dlc) || dlc.length === 0) continue;
+    out[appid] = [...new Set(dlc.filter((id) => Number.isInteger(id) && id > 0))];
+  }
+
+  return out;
+}
+
+function toDlcItem(id: number, parent: number, data: RawAppData | null): DlcItem {
+  if (!data) {
+    return {
+      id,
+      parent,
+      name: `App ${id}`,
+      type: "unknown",
+      free: false,
+      coming: false,
+      released: "",
+      currency: null,
+      initial: null,
+      final: null,
+      discount: 0,
+      formatted: null,
+      genres: [],
+      features: [],
+      unavailable: true,
+    };
+  }
+
+  const price = data.price_overview;
+  return {
+    id,
+    parent,
+    name: data.name?.trim() || `App ${id}`,
+    type: data.type ?? "dlc",
+    free: data.is_free === true,
+    coming: data.release_date?.coming_soon === true,
+    released: data.release_date?.date?.trim() ?? "",
+    currency: price?.currency ?? null,
+    initial: typeof price?.initial === "number" ? price.initial : null,
+    final: typeof price?.final === "number" ? price.final : null,
+    discount: typeof price?.discount_percent === "number" ? price.discount_percent : 0,
+    formatted: price?.final_formatted?.trim() ?? null,
+    genres: (data.genres ?? [])
+      .map((genre) => genre.description?.trim() ?? "")
+      .filter((value) => value.length > 0),
+    features: (data.categories ?? [])
+      .map((category) => category.description?.trim() ?? "")
+      .filter((value) => value.length > 0),
+    // Бесплатное DLC цены не имеет — это не признак недоступности.
+    unavailable: !price && data.is_free !== true && data.release_date?.coming_soon !== true,
+  };
+}
+
+/** Детали и цены для списка DLC. `parents` задаёт, к какой игре относится каждое DLC. */
+export async function fetchDlcItems(
+  parents: Record<number, number>,
+  options: Omit<AppDetailsOptions, "revalidate">,
+): Promise<DlcItem[]> {
+  const ids = Object.keys(parents).map(Number);
+  const details = await fetchAppDetails(ids, { ...options, revalidate: PRICE_TTL });
+  return ids.map((id) => toDlcItem(id, parents[id], details.get(id) ?? null));
+}
