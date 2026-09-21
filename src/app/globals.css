@@ -1,0 +1,37 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #0b1219;
+  --color-panel: #141d28;
+  --color-raised: #1b2838;
+  --color-line: #27384d;
+  --color-steam: #66c0f4;
+  --color-steam-dim: #417a9b;
+  --color-sale: #a4d007;
+  --color-sale-bg: #4c6b22;
+  --color-muted: #8ba0b6;
+  --color-warn: #f0a848;
+  --color-danger: #d95c5c;
+}
+
+html,
+body {
+  background-color: var(--color-ink);
+  color: #dfe6ee;
+}
+
+body {
+  font-family:
+    "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Скроллбар в тон тёмной теме */
+* {
+  scrollbar-color: var(--color-line) transparent;
+  scrollbar-width: thin;
+}
+
+input[type="range"] {
+  accent-color: var(--color-steam);
+}
