@@ -13,6 +13,7 @@ export type SteamErrorCode =
   | "vanity_not_found"
   | "rate_limited"
   | "store_forbidden"
+  | "bad_request"
   | "offline"
   | "upstream";
 
@@ -115,6 +116,18 @@ export function describeSteamError(error: unknown): SteamErrorDescription {
           "не пускает IP дата-центра. Помогает запуск на своём компьютере вместо хостинга.",
         status: 502,
         code: "store_forbidden",
+      };
+    }
+
+    if (error.status === 400 && isStore(error.host)) {
+      return {
+        message:
+          "Витрина Steam не приняла запрос (400). Обычно это значит, что набор " +
+          "запрошенных полей ей незнаком — приложение пробует более простые наборы, " +
+          "и если видишь это сообщение, не подошёл ни один." +
+          (error.detail ? ` Ответ Steam: ${error.detail}` : ""),
+        status: 502,
+        code: "bad_request",
       };
     }
 

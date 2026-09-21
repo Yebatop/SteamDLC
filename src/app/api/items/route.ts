@@ -34,11 +34,11 @@ export async function POST(request: Request) {
       parents[id] = Number.isInteger(parent) && parent > 0 ? parent : 0;
     }
 
-    const items = await fetchDlcItems(parents, {
+    const { items, failed } = await fetchDlcItems(parents, {
       cc: safeCc(body.cc),
       lang: safeLang(body.lang),
     });
-    return NextResponse.json({ items });
+    return NextResponse.json({ items, failed });
   } catch (error) {
     return failFromError(error);
   }

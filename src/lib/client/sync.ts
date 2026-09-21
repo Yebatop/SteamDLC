@@ -17,6 +17,8 @@ export interface SyncState {
   itemsLeft: number[];
   items: DlcItem[];
   error: string | null;
+  /** Сколько appid Steam не отдал: данные неполные, и это видно в интерфейсе. */
+  skipped: number;
   syncedAt: number;
 }
 
@@ -35,6 +37,7 @@ export function emptySync(cc: string, lang: string): SyncState {
     itemsLeft: [],
     items: [],
     error: null,
+    skipped: 0,
     syncedAt: 0,
   };
 }
@@ -86,7 +89,7 @@ export async function runSync(initial: SyncState, options: SyncOptions): Promise
 
   try {
     if (state.stage === "idle" || state.games.length === 0) {
-      commit({ stage: "library" });
+      commit({ stage: "library", skipped: 0 });
       const library = await postJson<{ steamId: string; games: OwnedGame[] }>(
         "/api/library",
         { profile: options.profile, apiKey: options.apiKey || undefined },
@@ -107,7 +110,7 @@ export async function runSync(initial: SyncState, options: SyncOptions): Promise
       if (options.signal.aborted) return commit({ stage: "paused" });
 
       const batch = state.gamesLeft.slice(0, CHUNK);
-      const response = await postJson<{ dlc: Record<string, number[]> }>(
+      const response = await postJson<{ dlc: Record<string, number[]>; failed?: number }>(
         "/api/dlc-ids",
         { appids: batch, cc: state.cc, lang: state.lang },
         options.signal,
@@ -117,7 +120,12 @@ export async function runSync(initial: SyncState, options: SyncOptions): Promise
       for (const [appid, ids] of Object.entries(response.dlc)) {
         dlcMap[Number(appid)] = ids;
       }
-      commit({ stage: "dlc", dlcMap, gamesLeft: state.gamesLeft.slice(batch.length) });
+      commit({
+        stage: "dlc",
+        dlcMap,
+        gamesLeft: state.gamesLeft.slice(batch.length),
+        skipped: state.skipped + (response.failed ?? 0),
+      });
     }
 
     if (state.itemsLeft.length === 0 && state.items.length === 0) {
@@ -133,7 +141,7 @@ export async function runSync(initial: SyncState, options: SyncOptions): Promise
       const payload: Record<number, number> = {};
       for (const id of batch) payload[id] = parents[id] ?? 0;
 
-      const response = await postJson<{ items: DlcItem[] }>(
+      const response = await postJson<{ items: DlcItem[]; failed?: number }>(
         "/api/items",
         { parents: payload, cc: state.cc, lang: state.lang },
         options.signal,
@@ -143,6 +151,7 @@ export async function runSync(initial: SyncState, options: SyncOptions): Promise
         stage: "items",
         items: [...state.items, ...response.items],
         itemsLeft: state.itemsLeft.slice(batch.length),
+        skipped: state.skipped + (response.failed ?? 0),
       });
     }
 

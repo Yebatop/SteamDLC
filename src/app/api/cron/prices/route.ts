@@ -43,7 +43,7 @@ export async function GET(request: Request) {
       const parents: Record<number, number> = {};
       for (const appid of appids) parents[appid] = 0;
 
-      const items = await fetchDlcItems(parents, { cc, lang: regionByCc(cc).lang });
+      const { items } = await fetchDlcItems(parents, { cc, lang: regionByCc(cc).lang });
       const byId = new Map(items.map((item) => [item.id, item]));
       pricesByRegion.set(cc, byId);
 
@@ -77,7 +77,7 @@ async function notifySubscribers(
       // Регион подписки ещё не опрашивался в этом запуске — добираем точечно.
       const parents: Record<number, number> = {};
       for (const item of config.items.slice(0, MAX_PER_REGION)) parents[item.id] = 0;
-      const items = await fetchDlcItems(parents, {
+      const { items } = await fetchDlcItems(parents, {
         cc: config.cc,
         lang: regionByCc(config.cc).lang,
       });

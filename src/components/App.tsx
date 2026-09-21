@@ -15,6 +15,7 @@ import {
 } from "@/lib/client/filters";
 import { EMPTY_OWNERSHIP, type Ownership } from "@/lib/client/ownership";
 import { DEFAULT_SETTINGS, type Settings } from "@/lib/client/settings";
+import { plural } from "@/lib/plural";
 import { clearAll, KEYS, loadJson, saveJson } from "@/lib/client/storage";
 import { emptySync, runSync, type SyncState } from "@/lib/client/sync";
 import BuyQueue from "./BuyQueue";
@@ -244,6 +245,9 @@ export default function App() {
               ? `Обновлено ${new Date(sync.syncedAt).toLocaleString("ru-RU")}`
               : "Данные ещё не полные"}
             {ownership.importedAt === 0 ? " · список купленного не импортирован" : ""}
+            {sync.skipped > 0
+              ? ` · Steam не отдал ${sync.skipped} ${plural(sync.skipped, "позицию", "позиции", "позиций")}`
+              : ""}
           </p>
         </div>
         <div className="ml-auto flex flex-wrap gap-2">

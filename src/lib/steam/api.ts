@@ -1,6 +1,6 @@
-import { fetchAppDetails, type AppDetailsOptions, type RawAppData } from "./appdetails";
-import { SteamApiError } from "./errors";
-import { getJson } from "./http";
+import { fetchAppDetails, type RawAppData } from "./appdetails.ts";
+import { SteamApiError } from "./errors.ts";
+import { getJson } from "./http.ts";
 import type { DlcItem, OwnedGame } from "./types";
 
 /** Список DLC у игры меняется редко — держим сутки. */
@@ -97,22 +97,37 @@ export async function fetchOwnedGames(steamId: string, apiKey: string): Promise<
     .sort((a, b) => b.playtime - a.playtime);
 }
 
-/** appid игры -> список appid её DLC. */
+/** Регион и язык витрины: всё, что нужно знать вызывающей стороне. */
+export interface RegionOptions {
+  cc: string;
+  lang: string;
+}
+
+export interface DlcIdsResult {
+  /** appid игры -> список appid её DLC. */
+  dlc: Record<number, number[]>;
+  /** Сколько игр не удалось опросить: данные неполные, и об этом надо сказать. */
+  failed: number;
+}
+
 export async function fetchDlcIds(
   appids: number[],
-  options: Omit<AppDetailsOptions, "revalidate">,
-): Promise<Record<number, number[]>> {
-  const details = await fetchAppDetails(appids, { ...options, revalidate: DLC_LIST_TTL });
-  const out: Record<number, number[]> = {};
+  options: RegionOptions,
+): Promise<DlcIdsResult> {
+  const { data, failed } = await fetchAppDetails(appids, {
+    ...options,
+    purpose: "dlcList",
+    revalidate: DLC_LIST_TTL,
+  });
+  const dlc: Record<number, number[]> = {};
 
   for (const appid of appids) {
-    const data = details.get(appid);
-    const dlc = data?.dlc;
-    if (!Array.isArray(dlc) || dlc.length === 0) continue;
-    out[appid] = [...new Set(dlc.filter((id) => Number.isInteger(id) && id > 0))];
+    const ids = data.get(appid)?.dlc;
+    if (!Array.isArray(ids) || ids.length === 0) continue;
+    dlc[appid] = [...new Set(ids.filter((id) => Number.isInteger(id) && id > 0))];
   }
 
-  return out;
+  return { dlc, failed };
 }
 
 function toDlcItem(id: number, parent: number, data: RawAppData | null): DlcItem {
@@ -161,12 +176,25 @@ function toDlcItem(id: number, parent: number, data: RawAppData | null): DlcItem
   };
 }
 
+export interface DlcItemsResult {
+  items: DlcItem[];
+  failed: number;
+}
+
 /** Детали и цены для списка DLC. `parents` задаёт, к какой игре относится каждое DLC. */
 export async function fetchDlcItems(
   parents: Record<number, number>,
-  options: Omit<AppDetailsOptions, "revalidate">,
-): Promise<DlcItem[]> {
+  options: RegionOptions,
+): Promise<DlcItemsResult> {
   const ids = Object.keys(parents).map(Number);
-  const details = await fetchAppDetails(ids, { ...options, revalidate: PRICE_TTL });
-  return ids.map((id) => toDlcItem(id, parents[id], details.get(id) ?? null));
+  const { data, failed } = await fetchAppDetails(ids, {
+    ...options,
+    purpose: "item",
+    revalidate: PRICE_TTL,
+  });
+
+  return {
+    items: ids.map((id) => toDlcItem(id, parents[id], data.get(id) ?? null)),
+    failed,
+  };
 }
