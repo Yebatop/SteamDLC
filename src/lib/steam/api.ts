@@ -1,4 +1,5 @@
-import { fetchAppDetails, type RawAppData } from "./appdetails.ts";
+import { fetchAppDetails } from "./appdetails.ts";
+import { dlcIdsFrom, toDlcItem } from "./parse.ts";
 import { SteamApiError } from "./errors.ts";
 import { getJson } from "./http.ts";
 import type { DlcItem, OwnedGame } from "./types";
@@ -128,58 +129,11 @@ export async function fetchDlcIds(
   const dlc: Record<number, number[]> = {};
 
   for (const appid of processed) {
-    const ids = data.get(appid)?.dlc;
-    if (!Array.isArray(ids) || ids.length === 0) continue;
-    dlc[appid] = [...new Set(ids.filter((id) => Number.isInteger(id) && id > 0))];
+    const ids = dlcIdsFrom(data.get(appid));
+    if (ids.length > 0) dlc[appid] = ids;
   }
 
   return { dlc, failed, processed, throttled };
-}
-
-function toDlcItem(id: number, parent: number, data: RawAppData | null): DlcItem {
-  if (!data) {
-    return {
-      id,
-      parent,
-      name: `App ${id}`,
-      type: "unknown",
-      free: false,
-      coming: false,
-      released: "",
-      currency: null,
-      initial: null,
-      final: null,
-      discount: 0,
-      formatted: null,
-      genres: [],
-      features: [],
-      unavailable: true,
-    };
-  }
-
-  const price = data.price_overview;
-  return {
-    id,
-    parent,
-    name: data.name?.trim() || `App ${id}`,
-    type: data.type ?? "dlc",
-    free: data.is_free === true,
-    coming: data.release_date?.coming_soon === true,
-    released: data.release_date?.date?.trim() ?? "",
-    currency: price?.currency ?? null,
-    initial: typeof price?.initial === "number" ? price.initial : null,
-    final: typeof price?.final === "number" ? price.final : null,
-    discount: typeof price?.discount_percent === "number" ? price.discount_percent : 0,
-    formatted: price?.final_formatted?.trim() ?? null,
-    genres: (data.genres ?? [])
-      .map((genre) => genre.description?.trim() ?? "")
-      .filter((value) => value.length > 0),
-    features: (data.categories ?? [])
-      .map((category) => category.description?.trim() ?? "")
-      .filter((value) => value.length > 0),
-    // Бесплатное DLC цены не имеет — это не признак недоступности.
-    unavailable: !price && data.is_free !== true && data.release_date?.coming_soon !== true,
-  };
 }
 
 export interface DlcItemsResult {

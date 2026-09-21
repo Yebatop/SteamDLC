@@ -1,5 +1,16 @@
+import { dlcIdsFrom, splitAppDetails, toDlcItem, type RawAppData } from "../steam/parse";
 import type { DlcItem, OwnedGame } from "../steam/types";
 import { ApiError, postJson } from "./api";
+import { directStatus, fetchAppDetailsDirect } from "./direct";
+
+/**
+ * Наборы полей для прямых запросов из браузера. Каскада здесь нет намеренно:
+ * если витрина ответит не тем, уходим на сервер — там перебор наборов уже есть.
+ */
+const DIRECT_FILTERS = {
+  dlcList: "basic",
+  item: "basic,price_overview,release_date,genres,categories",
+} as const;
 
 export type SyncStage = "idle" | "library" | "dlc" | "items" | "done" | "paused" | "error";
 
@@ -52,6 +63,13 @@ export function emptySync(cc: string, lang: string): SyncState {
   };
 }
 
+/** Сколько дополнений уже найдено на первом шаге. */
+export function discoveredDlcCount(state: SyncState): number {
+  let count = 0;
+  for (const ids of Object.values(state.dlcMap)) count += ids.length;
+  return count;
+}
+
 export function syncProgress(state: SyncState): { done: number; total: number; label: string } {
   if (state.stage === "library" || state.stage === "idle") {
     return { done: 0, total: 1, label: "Получаю список игр" };
@@ -61,11 +79,11 @@ export function syncProgress(state: SyncState): { done: number; total: number; l
     return {
       done: total - state.gamesLeft.length,
       total,
-      label: "Ищу DLC у каждой игры",
+      label: "Шаг 1 из 2: ищу дополнения у каждой игры",
     };
   }
   const total = state.items.length + state.itemsLeft.length || 1;
-  return { done: state.items.length, total, label: "Загружаю цены DLC" };
+  return { done: state.items.length, total, label: "Шаг 2 из 2: загружаю цены дополнений" };
 }
 
 function parentIndex(dlcMap: Record<number, number[]>): Record<number, number> {
@@ -96,7 +114,7 @@ interface ItemsResponse {
  * Паузы при ограничении частоты. Окно у витрины — около пяти минут,
  * поэтому ждём всё дольше, а не долбимся с одинаковым интервалом.
  */
-const THROTTLE_WAITS_MS = [60_000, 120_000, 300_000];
+const THROTTLE_WAITS_MS = [60_000, 120_000, 300_000, 300_000, 300_000];
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
@@ -131,6 +149,33 @@ export async function runSync(initial: SyncState, options: SyncOptions): Promise
     state = { ...state, ...patch };
     options.onUpdate(state);
     return state;
+  };
+
+  /**
+   * Пробует забрать данные из витрины прямо из браузера. Возвращает null,
+   * если это не удалось: дальше пойдёт обычный серверный путь.
+   */
+  const tryDirect = async (
+    appids: number[],
+    filters: string,
+    expectNames: boolean,
+  ): Promise<Map<number, RawAppData | null> | "throttled" | null> => {
+    if (directStatus() === "blocked") return null;
+
+    const result = await fetchAppDetailsDirect({
+      appids,
+      filters,
+      cc: state.cc,
+      lang: state.lang,
+      signal: options.signal,
+      expectNames,
+    });
+
+    if (!result.ok) return result.reason === "rate-limited" ? "throttled" : null;
+
+    const { data, missing } = splitAppDetails(appids, result.body);
+    // Витрина ответила не про все appid — досылать по одному умеет сервер.
+    return missing.length > 0 ? null : data;
   };
 
   /**
@@ -174,6 +219,27 @@ export async function runSync(initial: SyncState, options: SyncOptions): Promise
       if (options.signal.aborted) return commit({ stage: "paused" });
 
       const batch = state.gamesLeft.slice(0, chunkSize);
+
+      const direct = await tryDirect(batch, DIRECT_FILTERS.dlcList, false);
+      if (direct === "throttled") {
+        if (!(await waitOutThrottle())) break;
+        continue;
+      }
+      if (direct) {
+        const dlcMap = { ...state.dlcMap };
+        for (const [appid, data] of direct) {
+          const ids = dlcIdsFrom(data);
+          if (ids.length > 0) dlcMap[appid] = ids;
+        }
+        const handled = new Set(direct.keys());
+        commit({
+          stage: "dlc",
+          dlcMap,
+          gamesLeft: state.gamesLeft.filter((appid) => !handled.has(appid)),
+        });
+        continue;
+      }
+
       let response: DlcIdsResponse;
 
       try {
@@ -233,6 +299,24 @@ export async function runSync(initial: SyncState, options: SyncOptions): Promise
       const parents = parentIndex(state.dlcMap);
       const payload: Record<number, number> = {};
       for (const id of batch) payload[id] = parents[id] ?? 0;
+
+      const direct = await tryDirect(batch, DIRECT_FILTERS.item, true);
+      if (direct === "throttled") {
+        if (!(await waitOutThrottle())) break;
+        continue;
+      }
+      if (direct) {
+        const handled = new Set(direct.keys());
+        commit({
+          stage: "items",
+          items: [
+            ...state.items,
+            ...[...direct].map(([id, data]) => toDlcItem(id, parents[id] ?? 0, data)),
+          ],
+          itemsLeft: state.itemsLeft.filter((id) => !handled.has(id)),
+        });
+        continue;
+      }
 
       let response: ItemsResponse;
 

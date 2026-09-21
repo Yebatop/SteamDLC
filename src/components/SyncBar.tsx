@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { plural } from "@/lib/plural";
-import { syncProgress, type SyncState } from "@/lib/client/sync";
+import { discoveredDlcCount, syncProgress, type SyncState } from "@/lib/client/sync";
 import { Button } from "./ui";
 
 /** Обратный отсчёт до конца паузы. Тикает локально, состояние не трогает. */
@@ -17,8 +17,8 @@ function Countdown({ until }: { until: number }) {
   const seconds = Math.ceil(left / 1000);
   return (
     <span className="text-warn">
-      Steam ограничил частоту запросов. Продолжу автоматически через {seconds}{" "}
-      {plural(seconds, "секунду", "секунды", "секунд")}.
+      Steam ограничил частоту запросов — лимит считается на весь хостинг, а не на тебя.
+      Продолжу автоматически через {seconds} {plural(seconds, "секунду", "секунды", "секунд")}.
     </span>
   );
 }
@@ -37,6 +37,7 @@ export default function SyncBar({
   const active = running && state.stage !== "done" && state.stage !== "error";
   const waiting = active && state.waitUntil > Date.now();
   const { done, total, label } = syncProgress(state);
+  const found = discoveredDlcCount(state);
   const percent = total > 0 ? Math.round((done / total) * 100) : 0;
 
   if (!active && state.stage === "done" && !state.error) return null;
@@ -69,6 +70,7 @@ export default function SyncBar({
             />
           </div>
           <p className="text-xs text-muted">
+            {found > 0 ? `Найдено дополнений: ${found}. ` : ""}
             Можно закрыть вкладку — прогресс сохраняется и продолжится с этого места.
           </p>
         </>

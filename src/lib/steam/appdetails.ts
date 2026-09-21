@@ -1,5 +1,14 @@
 import { SteamHttpError } from "./errors.ts";
 import { firstFilters, nextFilters, type FilterPurpose } from "./filters.ts";
+import {
+  buildAppDetailsUrl,
+  hasNames,
+  hasPayload,
+  looksEmpty,
+  splitAppDetails,
+  type RawAppData,
+  type RawResponse,
+} from "./parse.ts";
 import { chunk, getJson, pool } from "./http.ts";
 
 /**
@@ -18,26 +27,6 @@ import { chunk, getJson, pool } from "./http.ts";
  * синхронизацию. Такие appid помечаются недоступными и считаются отдельно —
  * лучше отдать 290 игр из 297, чем ничего.
  */
-
-export interface RawAppData {
-  name?: string;
-  type?: string;
-  is_free?: boolean;
-  dlc?: number[];
-  fullgame?: { appid?: string | number; name?: string };
-  release_date?: { coming_soon?: boolean; date?: string };
-  price_overview?: {
-    currency?: string;
-    initial?: number;
-    final?: number;
-    discount_percent?: number;
-    final_formatted?: string;
-  };
-  genres?: Array<{ id?: string | number; description?: string }>;
-  categories?: Array<{ id?: number; description?: string }>;
-}
-
-type RawResponse = Record<string, { success?: boolean; data?: RawAppData } | undefined>;
 
 /** null означает, что данных нет: Steam ответил success:false или запрос не удался. */
 export type AppDetailsMap = Map<number, RawAppData | null>;
@@ -96,22 +85,13 @@ export interface AppDetailsOptions {
   deadline?: number;
 }
 
-function buildUrl(appids: number[], filters: string, options: AppDetailsOptions): string {
-  const params = new URLSearchParams({
-    appids: appids.join(","),
-    filters,
-    cc: options.cc,
-    l: options.lang,
-  });
-  return `https://store.steampowered.com/api/appdetails?${params.toString()}`;
-}
-
 async function fetchRaw(
   appids: number[],
   filters: string,
   options: AppDetailsOptions,
 ): Promise<RawResponse> {
-  const body = await getJson<RawResponse | null>(buildUrl(appids, filters, options), {
+  const url = buildAppDetailsUrl(appids, filters, options.cc, options.lang);
+  const body = await getJson<RawResponse | null>(url, {
     revalidate: options.revalidate ?? 0,
   });
   return body ?? {};
@@ -122,27 +102,6 @@ const isBadRequest = (error: unknown) =>
 
 const isRateLimited = (error: unknown) =>
   error instanceof SteamHttpError && error.status === 429;
-
-/** Есть ли в ответе хоть одно имя: признак того, что набор filters достаточный. */
-function hasNames(body: RawResponse): boolean {
-  return Object.values(body).some((entry) => Boolean(entry?.data?.name));
-}
-
-function hasPayload(body: RawResponse): boolean {
-  return Object.values(body).some((entry) => entry?.success !== false && Boolean(entry?.data));
-}
-
-/**
- * Витрина может ответить успехом и пустыми данными — так она поступает с
- * набором filters, который формально принимает, но не понимает. Молчание
- * такого рода однажды стоило нам всех DLC библиотеки, поэтому проверяем.
- */
-function looksEmpty(body: RawResponse): boolean {
-  const entries = Object.values(body).filter(
-    (entry) => entry?.success !== false && entry?.data,
-  );
-  return entries.length > 0 && entries.every((entry) => Object.keys(entry!.data!).length === 0);
-}
 
 /**
  * Один запрос с перебором наборов filters. Бросает исключение, только если
@@ -187,19 +146,10 @@ async function requestWithCascade(
     : new SteamHttpError("Витрина Steam не приняла запрос", 400, false);
 }
 
-/** Раскладывает ответ Steam по запрошенным appid, отдельно возвращая пропавшие. */
+/** Складывает разобранный ответ в общий результат, возвращая пропавшие appid. */
 function collect(appids: number[], body: RawResponse, into: AppDetailsMap): number[] {
-  const missing: number[] = [];
-
-  for (const appid of appids) {
-    const entry = body[String(appid)];
-    if (!entry) {
-      missing.push(appid);
-      continue;
-    }
-    into.set(appid, entry.success === false || !entry.data ? null : entry.data);
-  }
-
+  const { data, missing } = splitAppDetails(appids, body);
+  for (const [appid, value] of data) into.set(appid, value);
   return missing;
 }
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { probeDirect } from "@/lib/client/direct";
 import { Button } from "./ui";
 
 interface Check {
@@ -32,12 +33,16 @@ export default function Diagnostics({ apiKey }: { apiKey: string }) {
   const [busy, setBusy] = useState(false);
   const [diag, setDiag] = useState<DiagResult | null>(null);
   const [key, setKey] = useState<KeyResult | null>(null);
+  const [direct, setDirect] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const run = async () => {
     setBusy(true);
     setError(null);
     try {
+      // Прямой путь важнее всего: он обходит общий лимит запросов хостинга.
+      setDirect(await probeDirect());
+
       const [diagResponse, keyResponse] = await Promise.all([
         fetch("/api/diag").then((response) => response.json() as Promise<DiagResult>),
         fetch("/api/diag", {
@@ -76,6 +81,22 @@ export default function Diagnostics({ apiKey }: { apiKey: string }) {
 
           {key ? (
             <Line ok={key.ok} title={key.message} detail={`${key.status || "нет ответа"}`} />
+          ) : null}
+
+          {direct !== null ? (
+            <Line
+              ok={direct}
+              title={
+                direct
+                  ? "Витрина отвечает браузеру напрямую"
+                  : "Витрина не пускает браузер напрямую (CORS)"
+              }
+              detail={
+                direct
+                  ? "Запросы пойдут с твоего IP — лимит не общий с чужими проектами"
+                  : "Запросы идут через сервер, где лимит витрины общий на весь хостинг"
+              }
+            />
           ) : null}
 
           <div className="border-t border-line/60 pt-2 text-muted">
