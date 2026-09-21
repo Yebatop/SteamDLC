@@ -112,13 +112,15 @@ export interface DlcIdsResult {
   failed: number;
   /** Игры с окончательным результатом: остальные клиент попросит снова. */
   processed: number[];
+  /** Steam ограничил частоту — продолжать имеет смысл после паузы. */
+  throttled: boolean;
 }
 
 export async function fetchDlcIds(
   appids: number[],
   options: RegionOptions,
 ): Promise<DlcIdsResult> {
-  const { data, failed, processed } = await fetchAppDetails(appids, {
+  const { data, failed, processed, throttled } = await fetchAppDetails(appids, {
     ...options,
     purpose: "dlcList",
     revalidate: DLC_LIST_TTL,
@@ -131,7 +133,7 @@ export async function fetchDlcIds(
     dlc[appid] = [...new Set(ids.filter((id) => Number.isInteger(id) && id > 0))];
   }
 
-  return { dlc, failed, processed };
+  return { dlc, failed, processed, throttled };
 }
 
 function toDlcItem(id: number, parent: number, data: RawAppData | null): DlcItem {
@@ -185,6 +187,7 @@ export interface DlcItemsResult {
   failed: number;
   /** DLC с окончательным результатом. */
   processed: number[];
+  throttled: boolean;
 }
 
 /** Детали и цены для списка DLC. `parents` задаёт, к какой игре относится каждое DLC. */
@@ -193,7 +196,7 @@ export async function fetchDlcItems(
   options: RegionOptions,
 ): Promise<DlcItemsResult> {
   const ids = Object.keys(parents).map(Number);
-  const { data, failed, processed } = await fetchAppDetails(ids, {
+  const { data, failed, processed, throttled } = await fetchAppDetails(ids, {
     ...options,
     purpose: "item",
     revalidate: PRICE_TTL,
@@ -204,5 +207,6 @@ export async function fetchDlcItems(
     items: processed.map((id) => toDlcItem(id, parents[id], data.get(id) ?? null)),
     failed,
     processed,
+    throttled,
   };
 }

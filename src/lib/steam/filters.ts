@@ -11,8 +11,13 @@
 export type FilterPurpose = "dlcList" | "item";
 
 export const FILTER_CASCADES: Record<FilterPurpose, readonly string[]> = {
-  // Для списка DLC нужна ровно одна группа: ответ выходит крошечным.
-  dlcList: ["dlc", "basic"],
+  /**
+   * Только basic. Группа `dlc` выглядит логичной и даже не вызывает ошибки,
+   * но витрина отдаёт по ней пустой объект данных — на библиотеке в 297 игр
+   * это дало ровно ноль найденных DLC. Список дополнений приходит внутри
+   * basic, пусть и вместе с ненужными описаниями.
+   */
+  dlcList: ["basic"],
   // Для самих DLC нужны имя и тип, а они приходят только в составе basic.
   item: [
     "basic,price_overview,release_date,genres,categories",

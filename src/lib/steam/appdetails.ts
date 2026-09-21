@@ -51,6 +51,8 @@ export interface AppDetailsResult {
    * обработать до истечения бюджета времени — клиент попросит их снова.
    */
   processed: number[];
+  /** Steam включил ограничение частоты: продолжать прямо сейчас бессмысленно. */
+  throttled: boolean;
 }
 
 const MAX_BATCH = 40;
@@ -118,6 +120,9 @@ async function fetchRaw(
 const isBadRequest = (error: unknown) =>
   error instanceof SteamHttpError && error.status === 400;
 
+const isRateLimited = (error: unknown) =>
+  error instanceof SteamHttpError && error.status === 429;
+
 /** Есть ли в ответе хоть одно имя: признак того, что набор filters достаточный. */
 function hasNames(body: RawResponse): boolean {
   return Object.values(body).some((entry) => Boolean(entry?.data?.name));
@@ -125,6 +130,18 @@ function hasNames(body: RawResponse): boolean {
 
 function hasPayload(body: RawResponse): boolean {
   return Object.values(body).some((entry) => entry?.success !== false && Boolean(entry?.data));
+}
+
+/**
+ * Витрина может ответить успехом и пустыми данными — так она поступает с
+ * набором filters, который формально принимает, но не понимает. Молчание
+ * такого рода однажды стоило нам всех DLC библиотеки, поэтому проверяем.
+ */
+function looksEmpty(body: RawResponse): boolean {
+  const entries = Object.values(body).filter(
+    (entry) => entry?.success !== false && entry?.data,
+  );
+  return entries.length > 0 && entries.every((entry) => Object.keys(entry!.data!).length === 0);
 }
 
 /**
@@ -143,8 +160,11 @@ async function requestWithCascade(
     try {
       const body = await fetchRaw(appids, filters, options);
 
-      // Данные есть, но без имён — значит набор беднее, чем нужно.
-      if (purpose === "item" && hasPayload(body) && !hasNames(body)) {
+      // Набор filters не дал ничего полезного — пробуем следующий.
+      const insufficient =
+        looksEmpty(body) || (purpose === "item" && hasPayload(body) && !hasNames(body));
+
+      if (insufficient) {
         const fallback: string | null = nextFilters(purpose, filters);
         if (fallback) {
           filters = fallback;
@@ -193,10 +213,16 @@ export async function fetchAppDetails(
 ): Promise<AppDetailsResult> {
   const result: AppDetailsMap = new Map();
   const unique = [...new Set(appids)].filter((id) => Number.isInteger(id) && id > 0);
-  if (unique.length === 0) return { data: result, failed: 0, processed: [] };
+  if (unique.length === 0) return { data: result, failed: 0, processed: [], throttled: false };
 
   const deadline = options.deadline ?? Number.POSITIVE_INFINITY;
-  const outOfTime = () => Date.now() >= deadline;
+  /**
+   * Под ограничением частоты новые запросы только усугубляют дело: Steam
+   * продлевает окно. Останавливаемся и отдаём то, что успели, — клиент
+   * подождёт и продолжит с этого места.
+   */
+  let throttled = false;
+  const shouldStop = () => throttled || Date.now() >= deadline;
 
   const singles: number[] = [];
   const failed: number[] = [];
@@ -211,8 +237,9 @@ export async function fetchAppDetails(
     mode.batchSize = Math.max(MIN_BATCH, Math.floor(mode.batchSize / 2));
   };
 
-  await pool(chunk(unique, mode.batchSize), 2, async (batch) => {
-    if (outOfTime()) return;
+  // Параллелизм 1: витрина считает запросы по IP, а на хостинге он общий.
+  await pool(chunk(unique, mode.batchSize), 1, async (batch) => {
+    if (shouldStop()) return;
 
     try {
       const body = await requestWithCascade(batch, options);
@@ -223,6 +250,13 @@ export async function fetchAppDetails(
       }
     } catch (error) {
       firstError ??= error;
+
+      // Ограничение частоты — не вина этих appid: вернём их нетронутыми.
+      if (isRateLimited(error)) {
+        throttled = true;
+        return;
+      }
+
       // Возможно, витрине не понравился именно размер пачки.
       if (batch.length > 1) {
         shrinkBatch();
@@ -234,8 +268,8 @@ export async function fetchAppDetails(
   });
 
   if (singles.length > 0) {
-    await pool(singles, 2, async (appid) => {
-      if (outOfTime()) return;
+    await pool(singles, 1, async (appid) => {
+      if (shouldStop()) return;
 
       try {
         const body = await requestWithCascade([appid], options);
@@ -244,6 +278,10 @@ export async function fetchAppDetails(
         for (const id of missing) result.set(id, null);
       } catch (error) {
         firstError ??= error;
+        if (isRateLimited(error)) {
+          throttled = true;
+          return;
+        }
         failed.push(appid);
       }
     });
@@ -255,5 +293,5 @@ export async function fetchAppDetails(
 
   for (const appid of failed) result.set(appid, null);
 
-  return { data: result, failed: failed.length, processed: [...result.keys()] };
+  return { data: result, failed: failed.length, processed: [...result.keys()], throttled };
 }

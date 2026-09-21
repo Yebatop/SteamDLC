@@ -23,8 +23,11 @@ test("именно это и сломалось: name/type/is_free витрин�
   assert.equal(isKnownFilterSet("dlc"), true);
 });
 
-test("для списка DLC начинаем с самого лёгкого набора", () => {
-  assert.equal(firstFilters("dlcList"), "dlc");
+test("список DLC берём только из basic", () => {
+  // Группа `dlc` принимается витриной, но отдаёт пустоту — проверено на живой
+  // библиотеке: 297 игр и ноль найденных DLC.
+  assert.equal(firstFilters("dlcList"), "basic");
+  assert.deepEqual([...FILTER_CASCADES.dlcList], ["basic"]);
 });
 
 test("для самих DLC нужен basic: имя и тип приходят только в нём", () => {
@@ -48,5 +51,5 @@ test("каскад перебирается до конца и затем ост
 });
 
 test("неизвестный текущий набор откатывает на начало каскада", () => {
-  assert.equal(nextFilters("dlcList", "name,type"), "dlc");
+  assert.equal(nextFilters("item", "name,type"), FILTER_CASCADES.item[0]);
 });

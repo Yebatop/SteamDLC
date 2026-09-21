@@ -40,12 +40,12 @@ export async function POST(request: Request) {
       parents[id] = Number.isInteger(parent) && parent > 0 ? parent : 0;
     }
 
-    const { items, failed, processed } = await fetchDlcItems(parents, {
+    const { items, failed, processed, throttled } = await fetchDlcItems(parents, {
       cc: safeCc(body.cc),
       lang: safeLang(body.lang),
       deadline: Date.now() + TIME_BUDGET_MS,
     });
-    return NextResponse.json({ items, failed, processed });
+    return NextResponse.json({ items, failed, processed, throttled });
   } catch (error) {
     return failFromError(error);
   }

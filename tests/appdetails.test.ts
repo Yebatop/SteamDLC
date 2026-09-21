@@ -5,6 +5,7 @@ import {
   fetchAppDetails,
   resetAdaptiveMode,
 } from "../src/lib/steam/appdetails.ts";
+import { FILTER_CASCADES } from "../src/lib/steam/filters.ts";
 
 /**
  * Тесты на самый хрупкий кусок: общение с витриной Steam. Именно здесь
@@ -42,6 +43,14 @@ function stubFetch(handler: (call: Call, index: number) => Reply, delayMs = 0): 
 const ok = (appids: number[]) =>
   Object.fromEntries(appids.map((id) => [String(id), { success: true, data: { dlc: [id * 10] } }]));
 
+/** Для цен витрина обязана вернуть имя — иначе набор filters считается бедным. */
+const okItem = (appids: number[]) =>
+  Object.fromEntries(
+    appids.map((id) => [String(id), { success: true, data: { name: `DLC ${id}`, type: "dlc" } }]),
+  );
+
+const ITEM_OPTIONS = { cc: "ua", lang: "russian", purpose: "item" as const };
+
 beforeEach(() => {
   resetAdaptiveMode();
 });
@@ -57,16 +66,32 @@ test("успешный батч раскладывается по каждому
 });
 
 test("на 400 берётся следующий набор filters, а не падает вся загрузка", async () => {
+  const first = FILTER_CASCADES.item[0];
   stubFetch((call) =>
-    call.filters === "dlc" ? { status: 400, body: "null" } : { body: ok(call.appids) },
+    call.filters === first ? { status: 400, body: "null" } : { body: okItem(call.appids) },
   );
 
-  const { data, failed } = await fetchAppDetails([1, 2], OPTIONS);
+  const { data, failed } = await fetchAppDetails([1, 2], ITEM_OPTIONS);
 
   assert.equal(failed, 0);
-  assert.equal(calls[0].filters, "dlc", "сначала пробуем лёгкий набор");
-  assert.equal(calls[1].filters, "basic", "затем откатываемся на надёжный");
-  assert.deepEqual(data.get(1)?.dlc, [10]);
+  assert.equal(calls[0].filters, first, "сначала пробуем самый полный набор");
+  assert.equal(calls[1].filters, FILTER_CASCADES.item[1], "затем откатываемся на следующий");
+  assert.equal(data.get(1)?.name, "DLC 1");
+});
+
+test("успех с пустыми данными тоже переключает набор filters", async () => {
+  // Витрина отвечает 200 и пустым объектом: формально всё хорошо, толку ноль.
+  const first = FILTER_CASCADES.item[0];
+  stubFetch((call) =>
+    call.filters === first
+      ? { body: { "1": { success: true, data: {} } } }
+      : { body: okItem(call.appids) },
+  );
+
+  const { data } = await fetchAppDetails([1], ITEM_OPTIONS);
+
+  assert.ok(calls.length > 1, "на пустой ответ нужно пробовать следующий набор");
+  assert.equal(data.get(1)?.name, "DLC 1", "со следующим набором данные появились");
 });
 
 test("обрезанный батч добирается поштучно", async () => {
@@ -141,4 +166,25 @@ test("бюджет времени останавливает работу, а у
   assert.ok(processed.length > 0, "что-то должно успеть обработаться");
   assert.ok(processed.length < 120, "остальное остаётся на следующий запрос");
   assert.equal(data.size, processed.length, "processed описывает ровно то, что получено");
+});
+
+test("429 останавливает обход, но уже полученное сохраняется", async () => {
+  // Первая пачка проходит, на второй Steam включает ограничение частоты.
+  stubFetch((call) => (call.appids.includes(41) ? { status: 429, body: "" } : { body: ok(call.appids) }));
+
+  const { data, failed, processed, throttled } = await fetchAppDetails(many(80), OPTIONS);
+
+  assert.equal(throttled, true, "клиенту нужно знать, что дело в лимите");
+  assert.equal(failed, 0, "упёршиеся в лимит appid не виноваты и не потеряны");
+  assert.equal(processed.length, 40, "первая пачка сохранена");
+  assert.equal(data.size, 40);
+});
+
+test("под ограничением частоты лишние запросы не отправляются", async () => {
+  stubFetch(() => ({ status: 429, body: "" }));
+
+  await assert.rejects(() => fetchAppDetails(many(120), OPTIONS), /429/);
+
+  // Три пачки по сорок: после первого 429 остальные даже не пробуем.
+  assert.ok(calls.length <= 2, `лишние запросы под лимитом: ${calls.length}`);
 });

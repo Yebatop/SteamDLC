@@ -251,8 +251,13 @@ export default function App() {
           </p>
         </div>
         <div className="ml-auto flex flex-wrap gap-2">
-          <Button onClick={() => void start(true)} disabled={running}>
-            {running ? "Обновляю…" : "Обновить"}
+          {/*
+            Пока данные неполные, кнопка продолжает загрузку с места остановки.
+            Полное обновление заново дёргает библиотеку и зря тратит лимит
+            запросов Steam — оно осталось в настройках.
+          */}
+          <Button onClick={() => void start(sync.stage === "done")} disabled={running}>
+            {running ? "Загружаю…" : sync.stage === "done" ? "Обновить" : "Продолжить загрузку"}
           </Button>
           <Button variant="ghost" onClick={() => setDialog("settings")}>
             Настройки
@@ -267,6 +272,20 @@ export default function App() {
           onStart={() => void start(false)}
           onPause={pause}
         />
+
+        {/*
+          Ноль DLC на непустой библиотеке — почти наверняка не правда жизни,
+          а сбой: витрина ограничила запросы или сменила формат ответа.
+          Молчаливый ноль в таблице об этом не говорит, поэтому говорим здесь.
+        */}
+        {sync.stage === "done" && sync.items.length === 0 ? (
+          <div className="rounded-lg border border-warn/40 bg-warn/10 p-4 text-sm text-warn">
+            Steam не вернул ни одного DLC к {sync.games.length}{" "}
+            {plural(sync.games.length, "игре", "играм", "играм")}. Так бывает при ограничении
+            частоты запросов — нажми «Продолжить загрузку» через несколько минут. Если не
+            помогает, проверь связь кнопкой «Проверить доступ к Steam» в настройках.
+          </div>
+        ) : null}
 
         <Dashboard
           rows={rows}

@@ -15,6 +15,12 @@ export { SteamHttpError };
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 const MAX_ATTEMPTS = 4;
+/**
+ * На 429 долго ждать внутри функции бессмысленно: у неё свой бюджет времени,
+ * а окно ограничения у витрины — минуты. Паузу держит клиент, а не сервер.
+ */
+const RATE_LIMIT_ATTEMPTS = 2;
+const RATE_LIMIT_MAX_WAIT_MS = 3_000;
 /** Больше и не нужно: Steam пишет причину в первых строках. */
 const DETAIL_LIMIT = 500;
 
@@ -70,13 +76,18 @@ export async function getJson<T>(url: string, options: GetJsonOptions = {}): Pro
 
       if (response.status === 429) {
         const retryAfter = Number(response.headers.get("retry-after")) || 0;
-        const waitMs = retryAfter > 0 ? retryAfter * 1000 : Math.min(2 ** attempt * 1000, 15_000);
-        lastError = new SteamHttpError("Steam ограничил частоту запросов (429)", 429, true, host);
-        if (attempt < attempts) {
+        const waitMs = Math.min(
+          retryAfter > 0 ? retryAfter * 1000 : 2 ** attempt * 1000,
+          RATE_LIMIT_MAX_WAIT_MS,
+        );
+        if (attempt < Math.min(attempts, RATE_LIMIT_ATTEMPTS)) {
+          lastError = new SteamHttpError("Steam ограничил частоту запросов (429)", 429, true, host);
           await sleep(waitMs);
           continue;
         }
-        throw lastError;
+        // retryable: false — иначе этот же throw поймает catch ниже и уйдёт
+        // на повторы по общему бюджету, растягивая ожидание вчетверо.
+        throw new SteamHttpError("Steam ограничил частоту запросов (429)", 429, false, host);
       }
 
       if (response.status >= 500) {

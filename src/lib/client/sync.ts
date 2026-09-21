@@ -19,6 +19,8 @@ export interface SyncState {
   error: string | null;
   /** Сколько appid Steam не отдал: данные неполные, и это видно в интерфейсе. */
   skipped: number;
+  /** Пока не наступит этот момент, Steam всё равно откажет: ждём и продолжаем. */
+  waitUntil: number;
   syncedAt: number;
 }
 
@@ -45,6 +47,7 @@ export function emptySync(cc: string, lang: string): SyncState {
     items: [],
     error: null,
     skipped: 0,
+    waitUntil: 0,
     syncedAt: 0,
   };
 }
@@ -78,12 +81,31 @@ interface DlcIdsResponse {
   failed?: number;
   /** appid, по которым сервер довёл дело до конца. */
   processed?: number[];
+  /** Steam ограничил частоту: остаток пачки не обработан. */
+  throttled?: boolean;
 }
 
 interface ItemsResponse {
   items: DlcItem[];
   failed?: number;
   processed?: number[];
+  throttled?: boolean;
+}
+
+/**
+ * Паузы при ограничении частоты. Окно у витрины — около пяти минут,
+ * поэтому ждём всё дольше, а не долбимся с одинаковым интервалом.
+ */
+const THROTTLE_WAITS_MS = [60_000, 120_000, 300_000];
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
 }
 
 export interface SyncOptions {
@@ -102,11 +124,31 @@ export async function runSync(initial: SyncState, options: SyncOptions): Promise
   let state: SyncState = { ...initial, error: null };
   /** Уменьшается, если сервер не успевает ответить на большую пачку. */
   let chunkSize = CHUNK;
+  /** Сколько раз подряд упирались в ограничение частоты. */
+  let throttleCount = 0;
 
   const commit = (patch: Partial<SyncState>) => {
     state = { ...state, ...patch };
     options.onUpdate(state);
     return state;
+  };
+
+  /**
+   * Ждёт окончания ограничения частоты. Возвращает false, если ждать больше
+   * незачем: превышен лимит попыток или синхронизацию прервали.
+   */
+  const waitOutThrottle = async (): Promise<boolean> => {
+    if (throttleCount >= THROTTLE_WAITS_MS.length) return false;
+
+    const waitMs = THROTTLE_WAITS_MS[throttleCount];
+    throttleCount += 1;
+
+    const until = Date.now() + waitMs;
+    commit({ waitUntil: until });
+    await sleep(waitMs, options.signal);
+    commit({ waitUntil: 0 });
+
+    return !options.signal.aborted;
   };
 
   try {
@@ -146,6 +188,10 @@ export async function runSync(initial: SyncState, options: SyncOptions): Promise
           chunkSize = Math.max(MIN_CHUNK, Math.floor(chunkSize / 2));
           continue;
         }
+        // Ограничение частоты — не повод бросать: переждём и вернёмся сюда же.
+        if (error instanceof ApiError && error.rateLimited && (await waitOutThrottle())) {
+          continue;
+        }
         throw error;
       }
 
@@ -169,6 +215,10 @@ export async function runSync(initial: SyncState, options: SyncOptions): Promise
         gamesLeft: state.gamesLeft.filter((appid) => !done.has(appid)),
         skipped: state.skipped + (response.failed ?? 0),
       });
+
+      if (response.throttled && state.gamesLeft.length > 0) {
+        if (!(await waitOutThrottle())) break;
+      }
     }
 
     if (state.itemsLeft.length === 0 && state.items.length === 0) {
@@ -197,6 +247,9 @@ export async function runSync(initial: SyncState, options: SyncOptions): Promise
           chunkSize = Math.max(MIN_CHUNK, Math.floor(chunkSize / 2));
           continue;
         }
+        if (error instanceof ApiError && error.rateLimited && (await waitOutThrottle())) {
+          continue;
+        }
         throw error;
       }
 
@@ -215,17 +268,32 @@ export async function runSync(initial: SyncState, options: SyncOptions): Promise
         itemsLeft: state.itemsLeft.filter((id) => !done.has(id)),
         skipped: state.skipped + (response.failed ?? 0),
       });
+
+      if (response.throttled && state.itemsLeft.length > 0) {
+        if (!(await waitOutThrottle())) break;
+      }
     }
 
-    return commit({ stage: "done", syncedAt: Date.now(), error: null });
+    if (state.gamesLeft.length > 0 || state.itemsLeft.length > 0) {
+      return commit({
+        stage: "paused",
+        waitUntil: 0,
+        error:
+          "Steam долго держит ограничение частоты. Загруженное сохранено — " +
+          "нажми «Продолжить» через несколько минут.",
+      });
+    }
+
+    return commit({ stage: "done", syncedAt: Date.now(), waitUntil: 0, error: null });
   } catch (error) {
     if (options.signal.aborted) return commit({ stage: "paused" });
 
     if (error instanceof ApiError && error.rateLimited) {
       return commit({
         stage: "paused",
+        waitUntil: 0,
         error:
-          "Steam ограничил частоту запросов. Подожди минуту и нажми «Продолжить» — " +
+          "Steam ограничил частоту запросов. Подожди пару минут и нажми «Продолжить» — " +
           "загруженное уже сохранено.",
       });
     }
