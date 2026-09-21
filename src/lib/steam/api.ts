@@ -1,5 +1,8 @@
 import { fetchAppDetails } from "./appdetails.ts";
+import { currencyFor } from "../regions.ts";
 import { dlcIdsFrom, toDlcItem } from "./parse.ts";
+import { fetchStoreItems } from "./storebrowse.ts";
+import { toDlcItemFromStore } from "./storeitem.ts";
 import { SteamApiError } from "./errors.ts";
 import { getJson } from "./http.ts";
 import type { DlcItem, OwnedGame } from "./types";
@@ -104,6 +107,8 @@ export interface RegionOptions {
   lang: string;
   /** Момент, после которого новые запросы к Steam не начинаем. */
   deadline?: number;
+  /** Ключ Web API, если он есть: batch-сервис магазина охотнее отвечает с ним. */
+  apiKey?: string;
 }
 
 export interface DlcIdsResult {
@@ -144,23 +149,59 @@ export interface DlcItemsResult {
   throttled: boolean;
 }
 
-/** Детали и цены для списка DLC. `parents` задаёт, к какой игре относится каждое DLC. */
+/**
+ * Детали и цены для списка DLC. `parents` задаёт, к какой игре относится каждое DLC.
+ *
+ * Сначала пробуем batch-сервис на api.steampowered.com: он принимает по полсотни
+ * appid за запрос и не упирается в лимит витрины, выжженный на общем IP хостинга.
+ * Всё, что он не покрыл, дозапрашиваем через appdetails — там данные полнее.
+ */
 export async function fetchDlcItems(
   parents: Record<number, number>,
   options: RegionOptions,
 ): Promise<DlcItemsResult> {
   const ids = Object.keys(parents).map(Number);
-  const { data, failed, processed, throttled } = await fetchAppDetails(ids, {
+  const currency = currencyFor(options.cc);
+  const parentOf = (id: number) => parents[id] ?? 0;
+
+  const viaStore = await fetchStoreItems(ids, {
+    cc: options.cc,
+    lang: options.lang,
+    apiKey: options.apiKey,
+    deadline: options.deadline,
+  });
+
+  const items: DlcItem[] = [];
+  const processed: number[] = [];
+  const leftovers: number[] = [];
+
+  for (const id of ids) {
+    const item = viaStore.supported
+      ? toDlcItemFromStore(id, parentOf(id), viaStore.items.get(id), currency)
+      : null;
+
+    if (item) {
+      items.push(item);
+      processed.push(id);
+    } else {
+      leftovers.push(id);
+    }
+  }
+
+  if (leftovers.length === 0) {
+    return { items, failed: 0, processed, throttled: false };
+  }
+
+  const { data, failed, processed: fromDetails, throttled } = await fetchAppDetails(leftovers, {
     ...options,
     purpose: "item",
     revalidate: PRICE_TTL,
   });
 
-  return {
-    // Отдаём только то, что реально получили: остальное придёт следующей пачкой.
-    items: processed.map((id) => toDlcItem(id, parents[id], data.get(id) ?? null)),
-    failed,
-    processed,
-    throttled,
-  };
+  for (const id of fromDetails) {
+    items.push(toDlcItem(id, parentOf(id), data.get(id) ?? null));
+    processed.push(id);
+  }
+
+  return { items, failed, processed, throttled };
 }

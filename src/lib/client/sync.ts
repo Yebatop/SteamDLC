@@ -323,7 +323,12 @@ export async function runSync(initial: SyncState, options: SyncOptions): Promise
       try {
         response = await postJson<ItemsResponse>(
           "/api/items",
-          { parents: payload, cc: state.cc, lang: state.lang },
+          {
+            parents: payload,
+            cc: state.cc,
+            lang: state.lang,
+            apiKey: options.apiKey || undefined,
+          },
           options.signal,
         );
       } catch (error) {
