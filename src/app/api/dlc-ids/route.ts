@@ -23,8 +23,11 @@ export async function POST(request: Request) {
     const appids = parseAppids(body.appids, MAX_APPS);
     if (appids.length === 0) return NextResponse.json({ dlc: {} });
 
-    const dlc = await fetchDlcIds(appids, { cc: safeCc(body.cc), lang: safeLang(body.lang) });
-    return NextResponse.json({ dlc });
+    const { dlc, failed } = await fetchDlcIds(appids, {
+      cc: safeCc(body.cc),
+      lang: safeLang(body.lang),
+    });
+    return NextResponse.json({ dlc, failed });
   } catch (error) {
     return failFromError(error);
   }

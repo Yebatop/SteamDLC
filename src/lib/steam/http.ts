@@ -1,4 +1,4 @@
-import { cleanDetail, SteamHttpError } from "./errors";
+import { cleanDetail, SteamHttpError } from "./errors.ts";
 
 /**
  * Тонкая обёртка над fetch для Steam: таймауты, ретраи и уважение к 429.
@@ -34,7 +34,9 @@ function hostOf(url: string): string {
 async function detailOf(response: Response): Promise<string> {
   try {
     const text = await response.text();
-    return cleanDetail(text.slice(0, DETAIL_LIMIT));
+    const detail = cleanDetail(text.slice(0, DETAIL_LIMIT));
+    // Витрина на непонятный запрос отдаёт тело "null" — в сообщении это мусор.
+    return detail === "null" ? "" : detail;
   } catch {
     return "";
   }

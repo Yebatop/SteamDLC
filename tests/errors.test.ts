@@ -84,3 +84,12 @@ test("cleanDetail вычищает разметку и обрезает длин
   assert.equal(cleanDetail(raw), "Forbidden Access is denied.");
   assert.equal(cleanDetail("a".repeat(500), 10).length, 10);
 });
+
+test("400 от витрины объясняет причину, а не просто повторяет код", () => {
+  const described = describeSteamError(
+    new SteamHttpError("Steam ответил 400", 400, false, STEAM_STORE_HOST),
+  );
+
+  assert.equal(described.code, "bad_request");
+  assert.match(described.message, /набор/i, "нужно назвать настоящую причину");
+});
