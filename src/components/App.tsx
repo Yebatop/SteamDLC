@@ -236,27 +236,39 @@ export default function App() {
   }
 
   return (
-    <main className="mx-auto max-w-7xl px-4 py-6">
-      <header className="mb-4 flex flex-wrap items-center gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-slate-100">SteamDLC</h1>
-          <p className="text-xs text-muted">
-            {sync.syncedAt > 0
-              ? `Обновлено ${new Date(sync.syncedAt).toLocaleString("ru-RU")}`
-              : "Данные ещё не полные"}
-            {ownership.importedAt === 0 ? " · список купленного не импортирован" : ""}
-            {sync.skipped > 0
-              ? ` · Steam не отдал ${sync.skipped} ${plural(sync.skipped, "позицию", "позиции", "позиций")}`
-              : ""}
-          </p>
-        </div>
-        <div className="ml-auto flex flex-wrap gap-2">
-          <Button onClick={() => void start(true)} disabled={running}>
-            {running ? "Обновляю…" : "Обновить"}
-          </Button>
-          <Button variant="ghost" onClick={() => setDialog("settings")}>
-            Настройки
-          </Button>
+    <main className="mx-auto max-w-7xl px-4 pb-6">
+      <header className="glass sticky top-0 z-30 -mx-4 mb-4 border-b border-line px-4 py-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2.5">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-steam-dim/25 text-base font-bold text-steam">
+              S
+            </span>
+            <div>
+              <h1 className="text-lg leading-tight font-bold text-slate-50">SteamDLC</h1>
+              <p className="text-[11px] text-muted">
+                {sync.syncedAt > 0
+                  ? `Обновлено ${new Date(sync.syncedAt).toLocaleString("ru-RU")}`
+                  : "Данные ещё не полные"}
+                {ownership.importedAt === 0 ? " · купленное не импортировано" : ""}
+                {sync.skipped > 0
+                  ? ` · Steam не отдал ${sync.skipped} ${plural(sync.skipped, "позицию", "позиции", "позиций")}`
+                  : ""}
+              </p>
+            </div>
+          </div>
+
+          <div className="ml-auto flex flex-wrap gap-2">
+            <Button
+              variant={sync.stage === "done" ? "default" : "primary"}
+              onClick={() => void start(sync.stage === "done")}
+              disabled={running}
+            >
+              {running ? "Загружаю…" : sync.stage === "done" ? "Обновить" : "Продолжить загрузку"}
+            </Button>
+            <Button variant="ghost" onClick={() => setDialog("settings")}>
+              Настройки
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -267,6 +279,20 @@ export default function App() {
           onStart={() => void start(false)}
           onPause={pause}
         />
+
+        {/*
+          Ноль DLC на непустой библиотеке — почти наверняка не правда жизни,
+          а сбой: витрина ограничила запросы или сменила формат ответа.
+          Молчаливый ноль в таблице об этом не говорит, поэтому говорим здесь.
+        */}
+        {sync.stage === "done" && sync.items.length === 0 ? (
+          <div className="rounded-lg border border-warn/40 bg-warn/10 p-4 text-sm text-warn">
+            Steam не вернул ни одного DLC к {sync.games.length}{" "}
+            {plural(sync.games.length, "игре", "играм", "играм")}. Так бывает при ограничении
+            частоты запросов — нажми «Продолжить загрузку» через несколько минут. Если не
+            помогает, проверь связь кнопкой «Проверить доступ к Steam» в настройках.
+          </div>
+        ) : null}
 
         <Dashboard
           rows={rows}

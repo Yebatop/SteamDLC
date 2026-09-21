@@ -29,6 +29,8 @@ export interface FilterState {
   parentAppid: number | null;
   sort: SortKey;
   groupByGame: boolean;
+  /** Плитка с обложками или компактный список. */
+  view: "grid" | "list";
 }
 
 export const DEFAULT_FILTERS: FilterState = {
@@ -49,6 +51,7 @@ export const DEFAULT_FILTERS: FilterState = {
   parentAppid: null,
   sort: "value",
   groupByGame: false,
+  view: "grid",
 };
 
 export interface DlcRow {

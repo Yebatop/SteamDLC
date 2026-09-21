@@ -3,6 +3,7 @@
 import { REGIONS } from "@/lib/regions";
 import type { Ownership } from "@/lib/client/ownership";
 import type { Settings } from "@/lib/client/settings";
+import Diagnostics from "./Diagnostics";
 import UserdataImport from "./UserdataImport";
 import { Button, Field, Modal, TextInput } from "./ui";
 
@@ -66,6 +67,10 @@ export default function SettingsDialog({
 
         <div className="border-t border-line pt-4">
           <UserdataImport ownership={ownership} onImport={onImport} compact />
+        </div>
+
+        <div className="border-t border-line pt-4">
+          <Diagnostics apiKey={settings.apiKey} />
         </div>
 
         <div className="flex flex-wrap items-center gap-2 border-t border-line pt-4">

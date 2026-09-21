@@ -29,12 +29,12 @@ export async function POST(request: Request) {
     const appids = parseAppids(body.appids, MAX_APPS);
     if (appids.length === 0) return NextResponse.json({ dlc: {} });
 
-    const { dlc, failed, processed } = await fetchDlcIds(appids, {
+    const { dlc, failed, processed, throttled } = await fetchDlcIds(appids, {
       cc: safeCc(body.cc),
       lang: safeLang(body.lang),
       deadline: Date.now() + TIME_BUDGET_MS,
     });
-    return NextResponse.json({ dlc, failed, processed });
+    return NextResponse.json({ dlc, failed, processed, throttled });
   } catch (error) {
     return failFromError(error);
   }

@@ -1,4 +1,8 @@
-import { fetchAppDetails, type RawAppData } from "./appdetails.ts";
+import { fetchAppDetails } from "./appdetails.ts";
+import { currencyFor } from "../regions.ts";
+import { dlcIdsFrom, toDlcItem } from "./parse.ts";
+import { fetchStoreItems } from "./storebrowse.ts";
+import { toDlcItemFromStore } from "./storeitem.ts";
 import { SteamApiError } from "./errors.ts";
 import { getJson } from "./http.ts";
 import type { DlcItem, OwnedGame } from "./types";
@@ -103,6 +107,8 @@ export interface RegionOptions {
   lang: string;
   /** Момент, после которого новые запросы к Steam не начинаем. */
   deadline?: number;
+  /** Ключ Web API, если он есть: batch-сервис магазина охотнее отвечает с ним. */
+  apiKey?: string;
 }
 
 export interface DlcIdsResult {
@@ -112,13 +118,15 @@ export interface DlcIdsResult {
   failed: number;
   /** Игры с окончательным результатом: остальные клиент попросит снова. */
   processed: number[];
+  /** Steam ограничил частоту — продолжать имеет смысл после паузы. */
+  throttled: boolean;
 }
 
 export async function fetchDlcIds(
   appids: number[],
   options: RegionOptions,
 ): Promise<DlcIdsResult> {
-  const { data, failed, processed } = await fetchAppDetails(appids, {
+  const { data, failed, processed, throttled } = await fetchAppDetails(appids, {
     ...options,
     purpose: "dlcList",
     revalidate: DLC_LIST_TTL,
@@ -126,58 +134,11 @@ export async function fetchDlcIds(
   const dlc: Record<number, number[]> = {};
 
   for (const appid of processed) {
-    const ids = data.get(appid)?.dlc;
-    if (!Array.isArray(ids) || ids.length === 0) continue;
-    dlc[appid] = [...new Set(ids.filter((id) => Number.isInteger(id) && id > 0))];
+    const ids = dlcIdsFrom(data.get(appid));
+    if (ids.length > 0) dlc[appid] = ids;
   }
 
-  return { dlc, failed, processed };
-}
-
-function toDlcItem(id: number, parent: number, data: RawAppData | null): DlcItem {
-  if (!data) {
-    return {
-      id,
-      parent,
-      name: `App ${id}`,
-      type: "unknown",
-      free: false,
-      coming: false,
-      released: "",
-      currency: null,
-      initial: null,
-      final: null,
-      discount: 0,
-      formatted: null,
-      genres: [],
-      features: [],
-      unavailable: true,
-    };
-  }
-
-  const price = data.price_overview;
-  return {
-    id,
-    parent,
-    name: data.name?.trim() || `App ${id}`,
-    type: data.type ?? "dlc",
-    free: data.is_free === true,
-    coming: data.release_date?.coming_soon === true,
-    released: data.release_date?.date?.trim() ?? "",
-    currency: price?.currency ?? null,
-    initial: typeof price?.initial === "number" ? price.initial : null,
-    final: typeof price?.final === "number" ? price.final : null,
-    discount: typeof price?.discount_percent === "number" ? price.discount_percent : 0,
-    formatted: price?.final_formatted?.trim() ?? null,
-    genres: (data.genres ?? [])
-      .map((genre) => genre.description?.trim() ?? "")
-      .filter((value) => value.length > 0),
-    features: (data.categories ?? [])
-      .map((category) => category.description?.trim() ?? "")
-      .filter((value) => value.length > 0),
-    // Бесплатное DLC цены не имеет — это не признак недоступности.
-    unavailable: !price && data.is_free !== true && data.release_date?.coming_soon !== true,
-  };
+  return { dlc, failed, processed, throttled };
 }
 
 export interface DlcItemsResult {
@@ -185,24 +146,62 @@ export interface DlcItemsResult {
   failed: number;
   /** DLC с окончательным результатом. */
   processed: number[];
+  throttled: boolean;
 }
 
-/** Детали и цены для списка DLC. `parents` задаёт, к какой игре относится каждое DLC. */
+/**
+ * Детали и цены для списка DLC. `parents` задаёт, к какой игре относится каждое DLC.
+ *
+ * Сначала пробуем batch-сервис на api.steampowered.com: он принимает по полсотни
+ * appid за запрос и не упирается в лимит витрины, выжженный на общем IP хостинга.
+ * Всё, что он не покрыл, дозапрашиваем через appdetails — там данные полнее.
+ */
 export async function fetchDlcItems(
   parents: Record<number, number>,
   options: RegionOptions,
 ): Promise<DlcItemsResult> {
   const ids = Object.keys(parents).map(Number);
-  const { data, failed, processed } = await fetchAppDetails(ids, {
+  const currency = currencyFor(options.cc);
+  const parentOf = (id: number) => parents[id] ?? 0;
+
+  const viaStore = await fetchStoreItems(ids, {
+    cc: options.cc,
+    lang: options.lang,
+    apiKey: options.apiKey,
+    deadline: options.deadline,
+  });
+
+  const items: DlcItem[] = [];
+  const processed: number[] = [];
+  const leftovers: number[] = [];
+
+  for (const id of ids) {
+    const item = viaStore.supported
+      ? toDlcItemFromStore(id, parentOf(id), viaStore.items.get(id), currency)
+      : null;
+
+    if (item) {
+      items.push(item);
+      processed.push(id);
+    } else {
+      leftovers.push(id);
+    }
+  }
+
+  if (leftovers.length === 0) {
+    return { items, failed: 0, processed, throttled: false };
+  }
+
+  const { data, failed, processed: fromDetails, throttled } = await fetchAppDetails(leftovers, {
     ...options,
     purpose: "item",
     revalidate: PRICE_TTL,
   });
 
-  return {
-    // Отдаём только то, что реально получили: остальное придёт следующей пачкой.
-    items: processed.map((id) => toDlcItem(id, parents[id], data.get(id) ?? null)),
-    failed,
-    processed,
-  };
+  for (const id of fromDetails) {
+    items.push(toDlcItem(id, parentOf(id), data.get(id) ?? null));
+    processed.push(id);
+  }
+
+  return { items, failed, processed, throttled };
 }

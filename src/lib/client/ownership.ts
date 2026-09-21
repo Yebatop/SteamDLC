@@ -28,6 +28,25 @@ function numbers(value: unknown): number[] {
 export class OwnershipParseError extends Error {}
 
 /**
+ * Вытаскивает JSON из того, что реально попадает в буфер обмена.
+ *
+ * С телефона «выделить всё» на странице userdata приносит не чистый JSON:
+ * сверху бывает адрес страницы, снизу — служебные подписи браузера, а иногда
+ * текст переносится по строкам. Поэтому берём содержимое от первой фигурной
+ * скобки до последней и не заставляем пользователя чистить руками.
+ */
+export function extractJson(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) return trimmed;
+
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start < 0 || end <= start) return trimmed;
+
+  return trimmed.slice(start, end + 1);
+}
+
+/**
  * Разбирает JSON со страницы store.steampowered.com/dynamicstore/userdata/
  *
  * Это единственный способ узнать, какие DLC уже куплены: Web API их не отдаёт
@@ -40,7 +59,7 @@ export function parseUserdata(text: string): Ownership {
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(trimmed);
+    parsed = JSON.parse(extractJson(trimmed));
   } catch {
     throw new OwnershipParseError(
       "Это не JSON. Открой store.steampowered.com/dynamicstore/userdata/ и скопируй страницу целиком.",

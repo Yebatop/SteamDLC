@@ -36,7 +36,7 @@ export default function FiltersPanel({
     list.includes(value) ? list.filter((item) => item !== value) : [...list, value];
 
   return (
-    <div className="space-y-3 rounded-lg border border-line bg-panel p-4">
+    <div className="space-y-3 rounded-2xl border border-line bg-panel p-4">
       <div className="flex flex-wrap items-center gap-3">
         <div className="min-w-[220px] flex-1">
           <TextInput
@@ -49,7 +49,7 @@ export default function FiltersPanel({
         <select
           value={filters.sort}
           onChange={(event) => patch({ sort: event.target.value as SortKey })}
-          className="rounded border border-line bg-ink px-3 py-2 text-sm text-slate-100 outline-none focus:border-steam"
+          className="rounded-lg border border-line bg-ink/80 px-3.5 py-2.5 text-sm text-slate-100 outline-none transition-colors focus:border-steam"
         >
           {SORTS.map((sort) => (
             <option key={sort.key} value={sort.key}>
@@ -63,7 +63,7 @@ export default function FiltersPanel({
         </Button>
       </div>
 
-      <div className="flex flex-wrap gap-x-5 gap-y-2">
+      <div className="grid grid-cols-2 gap-1 sm:flex sm:flex-wrap sm:gap-x-3">
         <Toggle
           checked={filters.hideOwned}
           onChange={(hideOwned) => patch({ hideOwned })}
@@ -148,12 +148,12 @@ export default function FiltersPanel({
                 onChange={(event) =>
                   patch({ maxPrice: event.target.value === "" ? null : Number(event.target.value) })
                 }
-                className="w-full rounded border border-line bg-ink px-3 py-2 text-sm text-slate-100 outline-none focus:border-steam"
+                className="w-full rounded-lg border border-line bg-ink/80 px-3.5 py-2.5 text-sm text-slate-100 outline-none transition-colors focus:border-steam"
               />
             </label>
           </div>
 
-          <div className="flex flex-wrap gap-x-5 gap-y-2">
+          <div className="grid grid-cols-2 gap-1 sm:flex sm:flex-wrap sm:gap-x-3">
             <Toggle
               checked={filters.hideComingSoon}
               onChange={(hideComingSoon) => patch({ hideComingSoon })}

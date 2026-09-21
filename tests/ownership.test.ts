@@ -37,3 +37,19 @@ test("JSON без rgOwnedApps отвергается", () => {
 test("пустой список купленного считается разлогином", () => {
   assert.throws(() => parseUserdata(JSON.stringify({ rgOwnedApps: [] })), OwnershipParseError);
 });
+
+test("текст с мусором вокруг JSON всё равно разбирается", () => {
+  // Так выглядит «выделить всё» на телефоне: адрес сверху, подписи снизу.
+  const messy = `store.steampowered.com/dynamicstore/userdata/
+{"rgOwnedApps":[10,20],"rgWishlist":[30]}
+Готово`;
+
+  const result = parseUserdata(messy);
+  assert.deepEqual(result.owned, [10, 20]);
+  assert.deepEqual(result.wishlist, [30]);
+});
+
+test("перенос строк внутри JSON не мешает", () => {
+  const wrapped = '{"rgOwnedApps":[\n1,\n2\n],\n"rgWishlist":[]}';
+  assert.deepEqual(parseUserdata(wrapped).owned, [1, 2]);
+});

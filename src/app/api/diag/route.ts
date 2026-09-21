@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { cleanDetail, STEAM_STORE_HOST, STEAM_WEB_API_HOST } from "@/lib/steam/errors";
+import { buildGetItemsInput, parseStoreItems } from "@/lib/steam/storeitem";
 import { kvIsPersistent } from "@/lib/kv";
 
 export const runtime = "nodejs";
@@ -77,8 +78,11 @@ export async function GET() {
     ),
   ]);
 
+  // Отдельно: отвечает ли batch-сервис цен и понимаем ли мы его формат.
+  const storeBrowse = await probeStoreBrowse();
+
   return NextResponse.json({
-    checks,
+    checks: [...checks, storeBrowse],
     env: {
       // Сами значения не отдаём — только факт наличия.
       steamApiKey: Boolean(process.env.STEAM_API_KEY),
@@ -86,6 +90,33 @@ export async function GET() {
       telegram: Boolean(process.env.TELEGRAM_BOT_TOKEN),
     },
   });
+}
+
+/** Пачка цен через api.steampowered.com — обход лимита витрины. */
+async function probeStoreBrowse(): Promise<Probe> {
+  const params = new URLSearchParams({ input_json: buildGetItemsInput([440], "us", "english") });
+  const key = process.env.STEAM_API_KEY;
+  if (key) params.set("key", key);
+
+  const result = await probe(
+    "Цены пачкой (в обход лимита витрины)",
+    `https://${STEAM_WEB_API_HOST}/IStoreBrowseService/GetItems/v1/?${params.toString()}`,
+  );
+  if (!result.ok) return result;
+
+  // Доступность мало что значит: важно, распознаём ли мы формат ответа.
+  try {
+    const response = await fetch(
+      `https://${STEAM_WEB_API_HOST}/IStoreBrowseService/GetItems/v1/?${params.toString()}`,
+      { cache: "no-store" },
+    );
+    const parsed = parseStoreItems(await response.json());
+    return parsed && parsed.size > 0
+      ? { ...result, detail: `формат распознан, позиций: ${parsed.size}` }
+      : { ...result, ok: false, detail: "ответ есть, но формат незнакомый — уйдём на appdetails" };
+  } catch {
+    return { ...result, ok: false, detail: "ответ не разобрался" };
+  }
 }
 
 interface KeyCheckBody {

@@ -20,6 +20,7 @@ interface Body {
   parents?: unknown;
   cc?: unknown;
   lang?: unknown;
+  apiKey?: unknown;
 }
 
 /** Детали и цены пачки DLC. */
@@ -40,12 +41,18 @@ export async function POST(request: Request) {
       parents[id] = Number.isInteger(parent) && parent > 0 ? parent : 0;
     }
 
-    const { items, failed, processed } = await fetchDlcItems(parents, {
+    const apiKey =
+      typeof body.apiKey === "string" && body.apiKey.trim()
+        ? body.apiKey.trim()
+        : process.env.STEAM_API_KEY;
+
+    const { items, failed, processed, throttled } = await fetchDlcItems(parents, {
       cc: safeCc(body.cc),
       lang: safeLang(body.lang),
       deadline: Date.now() + TIME_BUDGET_MS,
+      apiKey,
     });
-    return NextResponse.json({ items, failed, processed });
+    return NextResponse.json({ items, failed, processed, throttled });
   } catch (error) {
     return failFromError(error);
   }

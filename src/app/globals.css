@@ -1,32 +1,37 @@
 @import "tailwindcss";
 
 @theme {
-  --color-ink: #0b1219;
-  --color-panel: #141d28;
-  --color-raised: #1b2838;
-  --color-line: #27384d;
+  --color-ink: #080b10;
+  --color-panel: #10151d;
+  --color-raised: #1a222e;
+  --color-line: #232d3b;
   --color-steam: #66c0f4;
-  --color-steam-dim: #417a9b;
+  --color-steam-dim: #3b82ab;
   --color-sale: #a4d007;
-  --color-sale-bg: #4c6b22;
-  --color-muted: #8ba0b6;
+  --color-sale-bg: #3d5417;
+  --color-muted: #8a9bad;
   --color-warn: #f0a848;
-  --color-danger: #d95c5c;
+  --color-danger: #e06c6c;
 }
 
 html,
 body {
   background-color: var(--color-ink);
-  color: #dfe6ee;
+  color: #e3e9f0;
 }
 
 body {
   font-family:
     "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-/* Скроллбар в тон тёмной теме */
+h1,
+h2 {
+  letter-spacing: -0.02em;
+}
+
 * {
   scrollbar-color: var(--color-line) transparent;
   scrollbar-width: thin;
@@ -34,4 +39,57 @@ body {
 
 input[type="range"] {
   accent-color: var(--color-steam);
+}
+
+/* Подсветка за героем: две мягкие сферы вместо плоского фона. */
+.hero-glow {
+  position: relative;
+  isolation: isolate;
+}
+
+.hero-glow::before {
+  content: "";
+  position: absolute;
+  inset: -20% -10% auto -10%;
+  height: 460px;
+  z-index: -1;
+  background:
+    radial-gradient(600px 300px at 20% 0%, rgba(102, 192, 244, 0.16), transparent 70%),
+    radial-gradient(500px 260px at 85% 10%, rgba(164, 208, 7, 0.09), transparent 70%);
+  pointer-events: none;
+}
+
+/* Липкая шапка поверх прокручивающегося каталога. */
+.glass {
+  background-color: color-mix(in srgb, var(--color-panel) 78%, transparent);
+  backdrop-filter: blur(14px) saturate(140%);
+}
+
+.gradient-text {
+  background: linear-gradient(120deg, #ffffff 10%, var(--color-steam) 90%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Карточка каталога: отрыв от фона на наведении. */
+.lift {
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    background-color 160ms ease;
+}
+
+.lift:hover {
+  transform: translateY(-2px);
+  border-color: var(--color-steam-dim);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lift {
+    transition: none;
+  }
+  .lift:hover {
+    transform: none;
+  }
 }
