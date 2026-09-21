@@ -46,11 +46,20 @@ export interface AppDetailsResult {
   data: AppDetailsMap;
   /** Сколько appid не удалось получить из-за ошибок (не из-за success:false). */
   failed: number;
+  /**
+   * appid с окончательным результатом. Всё, чего здесь нет, не успели
+   * обработать до истечения бюджета времени — клиент попросит их снова.
+   */
+  processed: number[];
 }
+
+const MAX_BATCH = 40;
+/** Ниже этого опускаться незачем: дальше растут только накладные расходы. */
+const MIN_BATCH = 5;
 
 /** Состояние подстройки живёт столько же, сколько инстанс функции. */
 const mode: { batchSize: number; filters: Record<FilterPurpose, string> } = {
-  batchSize: 40,
+  batchSize: MAX_BATCH,
   filters: {
     dlcList: firstFilters("dlcList"),
     item: firstFilters("item"),
@@ -61,8 +70,12 @@ const mode: { batchSize: number; filters: Record<FilterPurpose, string> } = {
  * Сбрасывает подстройку между тестами. В обычной работе состояние живёт
  * столько же, сколько инстанс функции, и сбрасывать его незачем.
  */
+export function currentBatchSize(): number {
+  return mode.batchSize;
+}
+
 export function resetAdaptiveMode(): void {
-  mode.batchSize = 40;
+  mode.batchSize = MAX_BATCH;
   mode.filters.dlcList = firstFilters("dlcList");
   mode.filters.item = firstFilters("item");
 }
@@ -73,6 +86,12 @@ export interface AppDetailsOptions {
   purpose: FilterPurpose;
   /** Сколько секунд держать ответ в кэше Next.js. */
   revalidate?: number;
+  /**
+   * Момент (Date.now()), после которого новые запросы не начинаем.
+   * Функция на хостинге живёт ограниченное время: лучше вернуть половину
+   * результата, чем упереться в таймаут и потерять всё.
+   */
+  deadline?: number;
 }
 
 function buildUrl(appids: number[], filters: string, options: AppDetailsOptions): string {
@@ -174,26 +193,39 @@ export async function fetchAppDetails(
 ): Promise<AppDetailsResult> {
   const result: AppDetailsMap = new Map();
   const unique = [...new Set(appids)].filter((id) => Number.isInteger(id) && id > 0);
-  if (unique.length === 0) return { data: result, failed: 0 };
+  if (unique.length === 0) return { data: result, failed: 0, processed: [] };
+
+  const deadline = options.deadline ?? Number.POSITIVE_INFINITY;
+  const outOfTime = () => Date.now() >= deadline;
 
   const singles: number[] = [];
   const failed: number[] = [];
   let firstError: unknown;
 
+  /**
+   * Пропуск нескольких appid — это «Steam не знает такие», а не сломанный
+   * батчинг: так ведут себя делистнутые игры. Уменьшаем пачку вдвое и только
+   * когда пропала бóльшая её часть — это уже похоже на обрезку ответа.
+   */
+  const shrinkBatch = () => {
+    mode.batchSize = Math.max(MIN_BATCH, Math.floor(mode.batchSize / 2));
+  };
+
   await pool(chunk(unique, mode.batchSize), 2, async (batch) => {
+    if (outOfTime()) return;
+
     try {
       const body = await requestWithCascade(batch, options);
       const missing = collect(batch, body, result);
       if (missing.length > 0) {
-        // Батч обрезан — дальше работаем поштучно.
-        if (batch.length > 1) mode.batchSize = 1;
+        if (batch.length > 1 && missing.length > batch.length / 2) shrinkBatch();
         singles.push(...missing);
       }
     } catch (error) {
       firstError ??= error;
       // Возможно, витрине не понравился именно размер пачки.
       if (batch.length > 1) {
-        mode.batchSize = 1;
+        shrinkBatch();
         singles.push(...batch);
       } else {
         failed.push(...batch);
@@ -203,6 +235,8 @@ export async function fetchAppDetails(
 
   if (singles.length > 0) {
     await pool(singles, 2, async (appid) => {
+      if (outOfTime()) return;
+
       try {
         const body = await requestWithCascade([appid], options);
         const missing = collect([appid], body, result);
@@ -215,9 +249,11 @@ export async function fetchAppDetails(
     });
   }
 
-  // Ничего не получилось вовсе — это настоящий сбой, о нём нужно сказать.
-  if (failed.length === unique.length && firstError) throw firstError;
+  // Проверяем до того, как разложим провалы: иначе «не вышло ничего»
+  // замаскируется под «всё обработано, просто недоступно».
+  if (result.size === 0 && firstError) throw firstError;
 
   for (const appid of failed) result.set(appid, null);
-  return { data: result, failed: failed.length };
+
+  return { data: result, failed: failed.length, processed: [...result.keys()] };
 }

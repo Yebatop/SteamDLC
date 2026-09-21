@@ -24,6 +24,13 @@ export interface SyncState {
 
 /** По столько appid за запрос: компромисс между скоростью и таймаутом функции. */
 const CHUNK = 40;
+/** Меньше уже не имеет смысла: накладные расходы съедают выигрыш. */
+const MIN_CHUNK = 5;
+
+/** Сбой на стороне сервера или сети: пачка, возможно, просто велика. */
+function isServerError(error: unknown): boolean {
+  return error instanceof ApiError && (error.status >= 500 || error.status === 0);
+}
 
 export function emptySync(cc: string, lang: string): SyncState {
   return {
@@ -66,6 +73,19 @@ function parentIndex(dlcMap: Record<number, number[]>): Record<number, number> {
   return index;
 }
 
+interface DlcIdsResponse {
+  dlc: Record<string, number[]>;
+  failed?: number;
+  /** appid, по которым сервер довёл дело до конца. */
+  processed?: number[];
+}
+
+interface ItemsResponse {
+  items: DlcItem[];
+  failed?: number;
+  processed?: number[];
+}
+
 export interface SyncOptions {
   profile: string;
   apiKey: string;
@@ -80,6 +100,8 @@ export interface SyncOptions {
  */
 export async function runSync(initial: SyncState, options: SyncOptions): Promise<SyncState> {
   let state: SyncState = { ...initial, error: null };
+  /** Уменьшается, если сервер не успевает ответить на большую пачку. */
+  let chunkSize = CHUNK;
 
   const commit = (patch: Partial<SyncState>) => {
     state = { ...state, ...patch };
@@ -109,12 +131,33 @@ export async function runSync(initial: SyncState, options: SyncOptions): Promise
     while (state.gamesLeft.length > 0) {
       if (options.signal.aborted) return commit({ stage: "paused" });
 
-      const batch = state.gamesLeft.slice(0, CHUNK);
-      const response = await postJson<{ dlc: Record<string, number[]>; failed?: number }>(
-        "/api/dlc-ids",
-        { appids: batch, cc: state.cc, lang: state.lang },
-        options.signal,
-      );
+      const batch = state.gamesLeft.slice(0, chunkSize);
+      let response: DlcIdsResponse;
+
+      try {
+        response = await postJson<DlcIdsResponse>(
+          "/api/dlc-ids",
+          { appids: batch, cc: state.cc, lang: state.lang },
+          options.signal,
+        );
+      } catch (error) {
+        // Сервер не уложился в свой таймаут — просим меньшую пачку.
+        if (isServerError(error) && chunkSize > MIN_CHUNK) {
+          chunkSize = Math.max(MIN_CHUNK, Math.floor(chunkSize / 2));
+          continue;
+        }
+        throw error;
+      }
+
+      // Сервер отдаёт ровно то, что успел: остальное запросим следующим шагом.
+      const done = new Set(response.processed ?? batch);
+      if (done.size === 0) {
+        if (chunkSize > MIN_CHUNK) {
+          chunkSize = Math.max(MIN_CHUNK, Math.floor(chunkSize / 2));
+          continue;
+        }
+        throw new ApiError("Steam не успевает отвечать — попробуй позже", 504);
+      }
 
       const dlcMap = { ...state.dlcMap };
       for (const [appid, ids] of Object.entries(response.dlc)) {
@@ -123,7 +166,7 @@ export async function runSync(initial: SyncState, options: SyncOptions): Promise
       commit({
         stage: "dlc",
         dlcMap,
-        gamesLeft: state.gamesLeft.slice(batch.length),
+        gamesLeft: state.gamesLeft.filter((appid) => !done.has(appid)),
         skipped: state.skipped + (response.failed ?? 0),
       });
     }
@@ -136,21 +179,40 @@ export async function runSync(initial: SyncState, options: SyncOptions): Promise
     while (state.itemsLeft.length > 0) {
       if (options.signal.aborted) return commit({ stage: "paused" });
 
-      const batch = state.itemsLeft.slice(0, CHUNK);
+      const batch = state.itemsLeft.slice(0, chunkSize);
       const parents = parentIndex(state.dlcMap);
       const payload: Record<number, number> = {};
       for (const id of batch) payload[id] = parents[id] ?? 0;
 
-      const response = await postJson<{ items: DlcItem[]; failed?: number }>(
-        "/api/items",
-        { parents: payload, cc: state.cc, lang: state.lang },
-        options.signal,
-      );
+      let response: ItemsResponse;
+
+      try {
+        response = await postJson<ItemsResponse>(
+          "/api/items",
+          { parents: payload, cc: state.cc, lang: state.lang },
+          options.signal,
+        );
+      } catch (error) {
+        if (isServerError(error) && chunkSize > MIN_CHUNK) {
+          chunkSize = Math.max(MIN_CHUNK, Math.floor(chunkSize / 2));
+          continue;
+        }
+        throw error;
+      }
+
+      const done = new Set(response.processed ?? batch);
+      if (done.size === 0) {
+        if (chunkSize > MIN_CHUNK) {
+          chunkSize = Math.max(MIN_CHUNK, Math.floor(chunkSize / 2));
+          continue;
+        }
+        throw new ApiError("Steam не успевает отвечать — попробуй позже", 504);
+      }
 
       commit({
         stage: "items",
         items: [...state.items, ...response.items],
-        itemsLeft: state.itemsLeft.slice(batch.length),
+        itemsLeft: state.itemsLeft.filter((id) => !done.has(id)),
         skipped: state.skipped + (response.failed ?? 0),
       });
     }

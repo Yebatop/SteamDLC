@@ -7,7 +7,13 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-/** Больше 60 игр за раз не берём: упрёмся в таймаут функции. */
+/**
+ * Функция на Vercel живёт не дольше maxDuration. Останавливаемся заранее и
+ * отдаём то, что успели: клиент попросит остаток следующим запросом.
+ */
+const TIME_BUDGET_MS = 45_000;
+
+/** Верхняя граница пачки: дальше решает бюджет времени. */
 const MAX_APPS = 40;
 
 interface Body {
@@ -23,11 +29,12 @@ export async function POST(request: Request) {
     const appids = parseAppids(body.appids, MAX_APPS);
     if (appids.length === 0) return NextResponse.json({ dlc: {} });
 
-    const { dlc, failed } = await fetchDlcIds(appids, {
+    const { dlc, failed, processed } = await fetchDlcIds(appids, {
       cc: safeCc(body.cc),
       lang: safeLang(body.lang),
+      deadline: Date.now() + TIME_BUDGET_MS,
     });
-    return NextResponse.json({ dlc, failed });
+    return NextResponse.json({ dlc, failed, processed });
   } catch (error) {
     return failFromError(error);
   }
