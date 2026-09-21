@@ -101,6 +101,8 @@ export async function fetchOwnedGames(steamId: string, apiKey: string): Promise<
 export interface RegionOptions {
   cc: string;
   lang: string;
+  /** Момент, после которого новые запросы к Steam не начинаем. */
+  deadline?: number;
 }
 
 export interface DlcIdsResult {
@@ -108,26 +110,28 @@ export interface DlcIdsResult {
   dlc: Record<number, number[]>;
   /** Сколько игр не удалось опросить: данные неполные, и об этом надо сказать. */
   failed: number;
+  /** Игры с окончательным результатом: остальные клиент попросит снова. */
+  processed: number[];
 }
 
 export async function fetchDlcIds(
   appids: number[],
   options: RegionOptions,
 ): Promise<DlcIdsResult> {
-  const { data, failed } = await fetchAppDetails(appids, {
+  const { data, failed, processed } = await fetchAppDetails(appids, {
     ...options,
     purpose: "dlcList",
     revalidate: DLC_LIST_TTL,
   });
   const dlc: Record<number, number[]> = {};
 
-  for (const appid of appids) {
+  for (const appid of processed) {
     const ids = data.get(appid)?.dlc;
     if (!Array.isArray(ids) || ids.length === 0) continue;
     dlc[appid] = [...new Set(ids.filter((id) => Number.isInteger(id) && id > 0))];
   }
 
-  return { dlc, failed };
+  return { dlc, failed, processed };
 }
 
 function toDlcItem(id: number, parent: number, data: RawAppData | null): DlcItem {
@@ -179,6 +183,8 @@ function toDlcItem(id: number, parent: number, data: RawAppData | null): DlcItem
 export interface DlcItemsResult {
   items: DlcItem[];
   failed: number;
+  /** DLC с окончательным результатом. */
+  processed: number[];
 }
 
 /** Детали и цены для списка DLC. `parents` задаёт, к какой игре относится каждое DLC. */
@@ -187,14 +193,16 @@ export async function fetchDlcItems(
   options: RegionOptions,
 ): Promise<DlcItemsResult> {
   const ids = Object.keys(parents).map(Number);
-  const { data, failed } = await fetchAppDetails(ids, {
+  const { data, failed, processed } = await fetchAppDetails(ids, {
     ...options,
     purpose: "item",
     revalidate: PRICE_TTL,
   });
 
   return {
-    items: ids.map((id) => toDlcItem(id, parents[id], data.get(id) ?? null)),
+    // Отдаём только то, что реально получили: остальное придёт следующей пачкой.
+    items: processed.map((id) => toDlcItem(id, parents[id], data.get(id) ?? null)),
     failed,
+    processed,
   };
 }

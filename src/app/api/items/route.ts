@@ -7,6 +7,12 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
+/**
+ * Функция на Vercel живёт не дольше maxDuration. Останавливаемся заранее и
+ * отдаём то, что успели: клиент попросит остаток следующим запросом.
+ */
+const TIME_BUDGET_MS = 45_000;
+
 const MAX_ITEMS = 40;
 
 interface Body {
@@ -34,11 +40,12 @@ export async function POST(request: Request) {
       parents[id] = Number.isInteger(parent) && parent > 0 ? parent : 0;
     }
 
-    const { items, failed } = await fetchDlcItems(parents, {
+    const { items, failed, processed } = await fetchDlcItems(parents, {
       cc: safeCc(body.cc),
       lang: safeLang(body.lang),
+      deadline: Date.now() + TIME_BUDGET_MS,
     });
-    return NextResponse.json({ items, failed });
+    return NextResponse.json({ items, failed, processed });
   } catch (error) {
     return failFromError(error);
   }
